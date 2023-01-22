@@ -1,0 +1,90 @@
+<html>
+<head>
+<title>Walking Munich</title>
+<script>
+const DATAFILE = 'data.json';
+</script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css"
+     integrity="sha256-kLaT2GOSpHechhsozzB+flnD+zUyjE2LlfWPgU04xyI="
+     crossorigin=""/>
+
+  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"
+     integrity="sha256-WBkoXOwTeyKclOHuWtc+i2uENFpDZ9YPdf5Hf+D7ewM="
+     crossorigin=""></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-gpx/1.7.0/gpx.min.js"></script>
+<style>
+body {
+  height: 100%;
+  margin: 0;
+}
+
+#main {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  height: 100%;
+}
+
+#slider {
+  height: 80%;
+}
+
+#loading {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  top: 0px;
+  left: 0px;
+  background-color: rgba(200,212, 190, 0.9);
+  z-index: 99999;
+}
+</style>
+</head>
+<body>
+<div id="main">
+<div id="control">
+<div style="display: none" x-work-in-progress="true">
+Datum: <span id="date">01.01.2023</span><br>
+Distanz: <span id="distance">123,4</span> km
+</div>
+<input type="range" id="slider" min="0" max="200" value="1" orient="vertical" ><br>
+<select id="mode">
+  <option value="0">Alle</option>
+  <option value="1">Einzel</option>
+</select>
+</div>
+ <div id="map"></div>
+ <div id="loading">Lade ...</div>
+
+</div>
+
+<script src="map/code.js"></script>
+<script>
+const progress = new LoadingProgress('loading');
+let pointToTime = null;
+
+const walking = new Walking('map');
+
+(async function() {
+  await fetch(DATAFILE)
+    .then(res => res.json())
+    .then(data => walking.setData(data, progress));
+
+
+  const slider = document.getElementById('slider');
+  slider.min = 0;
+  slider.max = walking.count() - 1;
+  slider.value = 0;
+
+  const modebox = document.getElementById('mode');
+  const outdistance = document.getElementById('distance');
+
+  slider.oninput = v => { walking.setPosition(v.target.value, modebox.value, outdistance); }
+  modebox.onchange = v => { walking.setPosition(slider.value, modebox.value, outdistance); }
+
+  walking.setPosition(slider.value, modebox.value, outdistance);
+
+  progress.done();
+})();
+</script>
+
