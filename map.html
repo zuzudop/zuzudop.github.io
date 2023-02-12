@@ -24,10 +24,14 @@ body {
   grid-template-columns: 100px 1fr;
   height: 100%;
 }
-
-#slider {
-  height: 80%;
+#slidercontainer {
+  width: 20%
 }
+#slider {
+  height: 90%;
+  -webkit-appearance: slider-vertical;
+   width: 100%;
+  }
 
 #loading {
   position: absolute;
@@ -47,7 +51,9 @@ body {
 Datum: <span id="date">01.01.2023</span><br>
 Distanz: <span id="distance">123,4</span> km
 </div>
-<input type="range" id="slider" min="0" max="200" value="1" orient="vertical" ><br>
+<div id="slidercontainer">
+<input type="range" id="slider" min="0" max="200" value="1" orient="vertical"><br>
+</div>
 <select id="mode">
   <option value="0">Alle</option>
   <option value="1">Einzel</option>
