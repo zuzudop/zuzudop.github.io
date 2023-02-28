@@ -33,10 +33,22 @@ class Walking {
 
   _sort() {
     this._tracks.sort((a,b) => {
+      //const start_a = a.getStartTime();
+      //const start_b = b.getStartTime();
+
+      //return start_a - start_b;
+
       const start_a = a.getStartTime();
       const start_b = b.getStartTime();
+       if (start_a === undefined) {
+            return -1;
+        }
+        if (start_b === undefined) {
+            return 1;
+        }
 
       return start_a - start_b;
+
     });
   }
 
