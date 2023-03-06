@@ -146,7 +146,7 @@ const Track  = L.Polyline.extend({
       const time = pointToTime(coordinates[0])
       const start = time ? new Date(time) : '(unbekannt)';
       const distance = this.getDistance();
-      return `ID: ${this.id} <br>Start: ${start}<br>Distance: ${Math.round(distance)}m`;
+      return `ID: ${this.id} <br>Start: ${start}<br>Distanz: ${Math.round(distance)}m`;
     });
   },
 	
