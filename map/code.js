@@ -104,6 +104,9 @@ class Walking {
     progress.progress('... Tracks generiert');
 
     this._sort();
+    let i = 0;
+    this._tracks.forEach(t => t.id = i++)
+
     progress.progress('... Tracks sortiert');
   }
 
@@ -143,7 +146,7 @@ const Track  = L.Polyline.extend({
       const time = pointToTime(coordinates[0])
       const start = time ? new Date(time) : '(unbekannt)';
       const distance = this.getDistance();
-      return `Start: ${start}<br>Distance: ${distance}m`;
+      return `ID: ${this.id} <br>Start: ${start}<br>Distance: ${distance}m`;
     });
   },
 	
