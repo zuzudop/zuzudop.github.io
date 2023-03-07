@@ -33,11 +33,6 @@ class Walking {
 
   _sort() {
     this._tracks.sort((a,b) => {
-      //const start_a = a.getStartTime();
-      //const start_b = b.getStartTime();
-
-      //return start_a - start_b;
-
       const start_a = a.getStartTime();
       const start_b = b.getStartTime();
        if (start_a === undefined) {
@@ -53,7 +48,27 @@ class Walking {
   }
 
   _aggregateByDay() {
+    const newTracks = [];
+    let current = null;
+    let currentDate = null;
 
+    this._tracks.forEach(track => {
+      const start_ts = track.getStartTime();
+      const d = (new Date(start_ts == undefined ? 0 : track.getStartTime())).toDateString();
+      if (d != currentDate) {
+         if (current) {
+           newTracks.push(new MultiTrack(this, current, currentDate, { color: 'green', weight: 2 }));
+
+	 }
+        current = [];
+        currentDate = d;
+      }
+      current.push(track.getLatLngs())
+    });
+
+    newTracks.push(new MultiTrack(this, current, { color: 'green', weight: 2 }));
+
+    this._tracks = newTracks;
   }
 
   count() {
@@ -104,6 +119,8 @@ class Walking {
     progress.progress('... Tracks generiert');
 
     this._sort();
+    this._aggregateByDay();
+
     let i = 0;
     this._tracks.forEach(t => t.id = i++)
 
@@ -135,6 +152,8 @@ class Walking {
 // TODO: inject into Track objects instead of global
 let pointtoTime = null;
 
+// TODO - this actually used only temporary before being replaced by MultiTrack
+//       we could get rid of it
 const Track  = L.Polyline.extend({
   initialize(walking, data, options) {
     L.Util.setOptions(this, options);
@@ -165,5 +184,34 @@ const Track  = L.Polyline.extend({
   }
 })
 
+
+const MultiTrack  = L.Polyline.extend({
+  initialize(walking, data, startDate, options) {
+    L.Util.setOptions(this, options);
+    this._setLatLngs(data);
+    this._data = data;
+    this._calcDistance(walking);
+    this.bindPopup(() => {
+      const start = startDate;
+      const distance = this.getDistance();
+      return `ID: ${this.id} <br>Start: ${start}<br>Distance: ${Math.round(distance)}m`;
+    });
+  },
+	
+  getStartTime() {
+    return pointToTime(this._data[0][0]);
+  },
+  _calcDistance(walking) {
+    this._distance = 0;
+    this._data.forEach(coordinates => {
+      for (i = 1; i < coordinates.length; ++i) {
+        this._distance += walking._map.distance(coordinates[i-1], coordinates[i]);
+      }
+    });
+  },
+  getDistance() {
+    return this._distance;
+  }
+})
 
 
