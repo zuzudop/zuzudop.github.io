@@ -68,6 +68,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 14px 0 6px
 .hbars { display: grid; grid-template-columns: max-content 1fr max-content; gap: 5px 10px; align-items: center; font-size: 13px; }
 .hbars .t { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
 .hbars .t i { display: block; height: 100%; border-radius: 4px; }
+.hbars b { font-weight: 600; }
 .hbars .v { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 .hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
 /* Charts */
@@ -146,7 +147,12 @@ footer { margin-top: auto; padding: 12px 20px; color: var(--muted); font-size: 1
       <div class="date" id="z-date">–</div>
       <div class="meta" id="z-meta">–</div>
       <div class="meta" id="z-cum">–</div>
-      <div class="meta" id="z-osm"></div>
+    </div>
+    <div id="z-osm" hidden>
+      <h2 id="z-osm-h">Gebiet</h2>
+      <div class="hbars" id="zh-g"></div>
+      <h2>Wegart</h2>
+      <div class="hbars" id="zh-w"></div>
     </div>
     <p class="hint">Pfeiltasten ← → blättern, Leertaste spielt ab.</p>
   </section>
@@ -326,7 +332,7 @@ function setIdx(i, fly) {
   const w = dated[state.idx];
   $('z-date').textContent = fmtDate(w.d, true);
   $('z-meta').textContent = `${nf1.format(w.km)} km` + (w.min ? ` · ${fmtDur(w.min)}` : '') + (w.t ? ` · Start ${w.t} Uhr` : '') + (w.add ? ` · davon ${nf1.format(w.add)} km nachgetragen` : '') + (w.new != null ? ` · ${nf1.format(w.new)} km neue Wege` : '');
-  $('z-osm').textContent = osmSummary(w);
+  showOsmDay(w);
   $('z-cum').textContent = `Bis hier: ${nf0.format(w.cum)} km in ${state.idx + 1} Spaziergängen` + (w.cumNew != null ? `, davon ${nf0.format(w.cumNew)} km ohne Wiederholung` : '');
   $('pos').textContent = `${state.idx + 1} / ${dated.length}`;
   history.replaceState(null, '', '#' + w.d);
@@ -374,22 +380,12 @@ let osmCum = null;  // Summen über alle Spaziergänge bis Index i
 function buildOsmCum() {
   osmCum = []; const acc = { g: {}, w: {} };
   for (const w of dated) {
-    for (const k of ['g', 'w']) for (const [c, v] of Object.entries(w.osm?.[k] || {})) acc[k][c] = (acc[k][c] || 0) + v;
+    for (const k of ['g', 'w']) for (const [c, v] of Object.entries(w.osm?.[k + 'n'] || {})) acc[k][c] = (acc[k][c] || 0) + v;
     osmCum.push({ g: { ...acc.g }, w: { ...acc.w } });
   }
 }
-function osmSummary(w) {
-  if (!OSM) return '';
-  const cum = state.zmode === 'cum' && osmCum && w.di != null;
-  const o = cum ? osmCum[w.di] : w.osm;
-  if (!o) return '';
-  const L = OSM.labels, f = v => (v >= 100 ? nf0 : nf1).format(v) + ' km';
-  const g = topN(o.g, ['sonstiges', 'wohngebiet']).map(([k, v]) => `${L.g[k]} ${f(v)}`);
-  const x = topN(o.w, ['wohnstrasse', 'gehweg', 'fussweg']).map(([k, v]) => `${L.w[k]} ${f(v)}`);
-  return (cum ? 'Bis hier – ' : '') + [g.length && 'Gebiet: ' + g.join(', '), x.length && 'Wege: ' + x.join(', ')].filter(Boolean).join(' · ');
-}
 function buildOsmLegend(k) {
-  const L = OSM.labels[k], T = OSM.total[k];
+  const L = OSM.labels[k], T = OSM.total[k + 'n'] || OSM.total[k];
   $('olegend').innerHTML = Object.keys(L).filter(c => T[c]).map(c =>
     `<label><input type="checkbox" data-c="${c}" ${osmOff[k].has(c) ? '' : 'checked'}><i style="background:${OSM_COL[k][c]}"></i>${L[c]}<span class="sub">${nf0.format(T[c])} km</span></label>`).join('');
   $('olegend').onchange = e => { const c = e.target.dataset.c; e.target.checked ? osmOff[k].delete(c) : osmOff[k].add(c); redraw(); };
@@ -397,10 +393,20 @@ function buildOsmLegend(k) {
     ? `Wegart laut OpenStreetMap (nächster Weg ≤ ${OSM.match_m} m). Stand der Karte: ${OSM.source}.`
     : 'Fläche, durch die der Weg führt, laut OpenStreetMap. Bei Überlappung zählt die speziellere (z. B. Spielplatz vor Park).';
 }
-function hbars(el, k, totals) {
-  const L = OSM.labels[k], ent = Object.keys(L).filter(c => totals[c]).map(c => [c, totals[c]]);
-  const max = Math.max(...ent.map(e => e[1])), sum = ent.reduce((a, e) => a + e[1], 0);
-  el.innerHTML = ent.map(([c, v]) => `<span>${L[c]}</span><span class="t"><i style="width:${(v / max * 100).toFixed(1)}%;background:${OSM_COL[k][c]}"></i></span><span class="v" title="${nf1.format(v / sum * 100)} %">${nf0.format(v)} km</span>`).join('');
+function hbars(el, k, totals, all) {
+  const L = OSM.labels[k], ent = Object.keys(L).filter(c => totals[c] >= .05).map(c => [c, totals[c]]);
+  const max = Math.max(...ent.map(e => e[1])), sum = Object.values(totals).reduce((a, v) => a + v, 0);
+  const f = v => (v >= 100 ? nf0 : nf1).format(v) + ' km';
+  el.innerHTML = ent.map(([c, v]) => `<span>${L[c]}</span><span class="t"><i style="width:${(v / max * 100).toFixed(1)}%;background:${OSM_COL[k][c]}"></i></span><span class="v" title="${nf1.format(v / sum * 100)} %${all ? ' · mit Wiederholungen ' + f(all[c] || 0) : ''}">${f(v)}</span>`).join('') +
+    `<b>Summe</b><span></span><b class="v">${f(sum)}</b>`;
+}
+function showOsmDay(w) {
+  if (!OSM || !w.osm) { $('z-osm').hidden = true; return; }
+  const cum = state.zmode === 'cum' && osmCum && w.di != null;
+  const o = cum ? osmCum[w.di] : { g: w.osm.g, w: w.osm.w };
+  $('z-osm-h').textContent = cum ? 'Gebiet bis hier (ohne Wiederholung)' : 'Gebiet an diesem Tag';
+  hbars($('zh-g'), 'g', o.g); hbars($('zh-w'), 'w', o.w);
+  $('z-osm').hidden = false;
 }
 async function loadOsm() {
   try {
@@ -413,8 +419,8 @@ async function loadOsm() {
   buildOsmCum();
   for (const k of ['w', 'g']) for (const [c, ls] of Object.entries(OSM.lines[k]))
     osmLayers[k][c] = L.polyline(ls.map(decode), { renderer, interactive: false, color: OSM_COL[k][c], weight: c === 'sonstiges' || c === 'wohngebiet' ? 2 : 3, opacity: .9, lineCap: 'round' });
-  hbars($('h-w'), 'w', OSM.total.w); hbars($('h-g'), 'g', OSM.total.g); hbars($('h-b'), 'b', OSM.total.b);
-  $('s-osm-hint').textContent = 'Gegangene Kilometer (inkl. Wiederholungen) nach OpenStreetMap-Daten. Belag ohne Angabe gilt bei Straßen und Gehwegen als befestigt.';
+  const T = OSM.total; hbars($('h-w'), 'w', T.wn, T.w); hbars($('h-g'), 'g', T.gn, T.g); hbars($('h-b'), 'b', T.bn, T.b);
+  $('s-osm-hint').textContent = 'Kilometer ohne Wiederholung nach OpenStreetMap-Daten; mit Wiederholungen beim Darüberfahren. Belag ohne Angabe gilt bei Straßen und Gehwegen als befestigt.';
   $('s-osm').hidden = false;
   if (state.tab === 'zeit') setIdx(state.idx); else redraw();
 }
