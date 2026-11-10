@@ -370,12 +370,23 @@ function buildFreq() {
 
 // ---------- OSM ----------
 const topN = (o, skip, n = 3) => Object.entries(o || {}).filter(([k]) => !skip.includes(k)).sort((a, b) => b[1] - a[1]).slice(0, n);
+let osmCum = null;  // Summen über alle Spaziergänge bis Index i
+function buildOsmCum() {
+  osmCum = []; const acc = { g: {}, w: {} };
+  for (const w of dated) {
+    for (const k of ['g', 'w']) for (const [c, v] of Object.entries(w.osm?.[k] || {})) acc[k][c] = (acc[k][c] || 0) + v;
+    osmCum.push({ g: { ...acc.g }, w: { ...acc.w } });
+  }
+}
 function osmSummary(w) {
-  if (!OSM || !w.osm) return '';
-  const L = OSM.labels;
-  const g = topN(w.osm.g, ['sonstiges', 'wohngebiet']).map(([k, v]) => `${L.g[k]} ${nf1.format(v)} km`);
-  const x = topN(w.osm.w, ['wohnstrasse', 'gehweg', 'fussweg']).map(([k, v]) => `${L.w[k]} ${nf1.format(v)} km`);
-  return [g.length && 'Gebiet: ' + g.join(', '), x.length && 'Wege: ' + x.join(', ')].filter(Boolean).join(' · ');
+  if (!OSM) return '';
+  const cum = state.zmode === 'cum' && osmCum && w.di != null;
+  const o = cum ? osmCum[w.di] : w.osm;
+  if (!o) return '';
+  const L = OSM.labels, f = v => (v >= 100 ? nf0 : nf1).format(v) + ' km';
+  const g = topN(o.g, ['sonstiges', 'wohngebiet']).map(([k, v]) => `${L.g[k]} ${f(v)}`);
+  const x = topN(o.w, ['wohnstrasse', 'gehweg', 'fussweg']).map(([k, v]) => `${L.w[k]} ${f(v)}`);
+  return (cum ? 'Bis hier – ' : '') + [g.length && 'Gebiet: ' + g.join(', '), x.length && 'Wege: ' + x.join(', ')].filter(Boolean).join(' · ');
 }
 function buildOsmLegend(k) {
   const L = OSM.labels[k], T = OSM.total[k];
@@ -399,6 +410,7 @@ async function loadOsm() {
   } catch { return; }
   const byD = new Map(OSM.walks.map(o => [o.d + '|' + o.km, o]));
   W.forEach(w => { w.osm = byD.get(w.d + '|' + w.km); });
+  buildOsmCum();
   for (const k of ['w', 'g']) for (const [c, ls] of Object.entries(OSM.lines[k]))
     osmLayers[k][c] = L.polyline(ls.map(decode), { renderer, interactive: false, color: OSM_COL[k][c], weight: c === 'sonstiges' || c === 'wohngebiet' ? 2 : 3, opacity: .9, lineCap: 'round' });
   hbars($('h-w'), 'w', OSM.total.w); hbars($('h-g'), 'g', OSM.total.g); hbars($('h-b'), 'b', OSM.total.b);
@@ -487,7 +499,8 @@ function segmented(id, key) {
     redraw();
   };
 }
-segmented('zmode', 'zmode'); segmented('cmode', 'cmode');
+segmented('zmode', 'zmode');
+$('zmode').addEventListener('click', () => { if (dated.length) setIdx(state.idx); }); segmented('cmode', 'cmode');
 
 // ---------- Laden ----------
 (async () => {
