@@ -49,7 +49,7 @@ section { padding: 16px 20px 24px; display: none; }
 section.on { display: block; }
 h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 20px 0 8px; }
 h2:first-child { margin-top: 0; }
-.seg { display: inline-flex; background: var(--bg); border-radius: 8px; padding: 3px; gap: 2px; }
+.seg { display: inline-flex; flex-wrap: wrap; background: var(--bg); border-radius: 8px; padding: 3px; gap: 2px; }
 .seg button { border: 0; background: none; font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 6px; cursor: pointer; color: var(--muted); }
 .seg button[aria-pressed="true"] { background: var(--panel); color: var(--ink); box-shadow: var(--shadow); }
 .row { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
@@ -62,6 +62,13 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 14px 0 6px
 .legend { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-top: 8px; }
 .legend i { display: inline-block; width: 14px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
 .legend label { cursor: pointer; user-select: none; }
+.legend.col { display: grid; grid-template-columns: 1fr; gap: 4px; }
+.legend.col label { display: flex; align-items: center; gap: 6px; }
+.legend.col label .sub { margin-left: auto; font-variant-numeric: tabular-nums; }
+.hbars { display: grid; grid-template-columns: max-content 1fr max-content; gap: 5px 10px; align-items: center; font-size: 13px; }
+.hbars .t { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+.hbars .t i { display: block; height: 100%; border-radius: 4px; }
+.hbars .v { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 .hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
 /* Charts */
 .chart { width: 100%; height: auto; display: block; }
@@ -139,14 +146,17 @@ footer { margin-top: auto; padding: 12px 20px; color: var(--muted); font-size: 1
       <div class="date" id="z-date">–</div>
       <div class="meta" id="z-meta">–</div>
       <div class="meta" id="z-cum">–</div>
+      <div class="meta" id="z-osm"></div>
     </div>
     <p class="hint">Pfeiltasten ← → blättern, Leertaste spielt ab.</p>
   </section>
 
   <section id="karte">
     <div class="seg" id="cmode">
-      <button data-v="year" aria-pressed="true">Nach Jahr</button>
+      <button data-v="year" aria-pressed="true">Jahr</button>
       <button data-v="freq" aria-pressed="false">Wie oft</button>
+      <button data-v="w" aria-pressed="false">Wegart</button>
+      <button data-v="g" aria-pressed="false">Gebiet</button>
       <button data-v="heat" aria-pressed="false">Heatmap</button>
     </div>
     <div id="leg-year">
@@ -157,11 +167,24 @@ footer { margin-top: auto; padding: 12px 20px; color: var(--muted); font-size: 1
       <div class="legend" id="flegend"></div>
       <p class="hint" id="fhint"></p>
     </div>
+    <div id="leg-osm" hidden>
+      <div class="legend col" id="olegend"></div>
+      <p class="hint" id="ohint"></p>
+    </div>
   </section>
 
   <section id="stats">
     <h2>Kilometer pro Monat</h2>
     <svg class="chart" id="c-month"></svg>
+    <div id="s-osm" hidden>
+      <h2>Wegart</h2>
+      <div class="hbars" id="h-w"></div>
+      <h2>Gebiet</h2>
+      <div class="hbars" id="h-g"></div>
+      <h2>Belag</h2>
+      <div class="hbars" id="h-b"></div>
+      <p class="hint" id="s-osm-hint"></p>
+    </div>
     <h2>Wie oft gegangen</h2>
     <table id="t-freq"></table>
     <h2>Pro Jahr</h2>
@@ -238,6 +261,14 @@ const renderer = L.canvas({ padding: .5, tolerance: 6 });
 
 let W = [], dated = [], state = { tab: 'zeit', idx: 0, zmode: 'cum', cmode: 'year', years: new Set(), sel: null };
 let heat = null, playTimer = null, REP = null, freqLayers = [];
+let OSM = null, osmLayers = { w: {}, g: {} }, osmOff = { w: new Set(), g: new Set() };
+const OSM_COL = {
+  w: { gehweg: '#868e96', fussweg: '#1c7ed6', fussgaengerzone: '#7048e8', pfad: '#2f9e44', trampelpfad: '#e8590c', treppe: '#c2255c',
+       radweg: '#15aabf', feldweg: '#a0782c', wohnstrasse: '#f59f00', hauptstrasse: '#e03131', keiner: '#f783ac' },
+  g: { spielplatz: '#fa5252', friedhof: '#7950f2', kleingarten: '#94d82d', sport: '#fd7e14', park: '#2f9e44', wald: '#0b7a3e',
+       wiese: '#d4a72c', wasser: '#339af0', bildung: '#e64980', gewerbe: '#868e96', bahn: '#5c5f66', wohngebiet: '#f2b880', sonstiges: '#ced4da' },
+  b: { fest: '#868e96', lose: '#a0782c', unbekannt: '#ced4da' },
+};
 
 function styleFor(w) {
   const s = state;
@@ -249,7 +280,7 @@ function styleFor(w) {
     return { color: css('--trail'), weight: 2, opacity: .85 - .5 * age };
   }
   if (s.tab === 'karte') {
-    if (s.cmode === 'heat') return null;
+    if (s.cmode === 'heat' || s.cmode === 'w' || s.cmode === 'g') return null;
     if (s.cmode === 'freq') return { color: css('--f1'), weight: 1.6, opacity: .7 };
     if (!s.years.has(w.y)) return null;
     return { color: yearColor(w.y), weight: 2, opacity: .75 };
@@ -271,6 +302,14 @@ function redraw() {
   for (const l of freqLayers) { if (wantFreq && !map.hasLayer(l)) l.addTo(map); if (!wantFreq && map.hasLayer(l)) map.removeLayer(l); if (wantFreq) l.bringToFront(); }
   $('leg-year').hidden = !(state.tab === 'karte' && state.cmode === 'year');
   $('leg-freq').hidden = !wantFreq;
+  const om = state.tab === 'karte' && (state.cmode === 'w' || state.cmode === 'g') ? state.cmode : null;
+  $('leg-osm').hidden = !om;
+  if (om && !OSM) $('ohint').textContent = 'Die OSM-Auswertung (osm.json) fehlt. Bitte mit osm_analyse.py erzeugen.';
+  for (const k of ['w', 'g']) for (const [c, l] of Object.entries(osmLayers[k])) {
+    const want = om === k && !osmOff[k].has(c);
+    if (want && !map.hasLayer(l)) l.addTo(map); if (!want && map.hasLayer(l)) map.removeLayer(l);
+  }
+  if (om && OSM) buildOsmLegend(om);
   const wantHeat = state.tab === 'karte' && state.cmode === 'heat';
   if (wantHeat && !heat) {
     const pts = []; for (const w of W) for (const l of w.lines) for (const p of l) pts.push(p);
@@ -287,6 +326,7 @@ function setIdx(i, fly) {
   const w = dated[state.idx];
   $('z-date').textContent = fmtDate(w.d, true);
   $('z-meta').textContent = `${nf1.format(w.km)} km` + (w.min ? ` · ${fmtDur(w.min)}` : '') + (w.t ? ` · Start ${w.t} Uhr` : '') + (w.add ? ` · davon ${nf1.format(w.add)} km nachgetragen` : '') + (w.new != null ? ` · ${nf1.format(w.new)} km neue Wege` : '');
+  $('z-osm').textContent = osmSummary(w);
   $('z-cum').textContent = `Bis hier: ${nf0.format(w.cum)} km in ${state.idx + 1} Spaziergängen` + (w.cumNew != null ? `, davon ${nf0.format(w.cumNew)} km ohne Wiederholung` : '');
   $('pos').textContent = `${state.idx + 1} / ${dated.length}`;
   history.replaceState(null, '', '#' + w.d);
@@ -326,6 +366,45 @@ function buildFreq() {
   $('t-freq').innerHTML = '<tr><th>Gegangen an</th><th>km</th><th>Anteil</th></tr>' +
     Object.entries(kb).map(([k, v]) => `<tr><td>${k === '1' ? '1 Tag' : k + ' Tagen'}</td><td>${nf1.format(v)}</td><td>${nf1.format(v / tot * 100)} %</td></tr>`).join('') +
     `<tr><td><b>Ohne Wiederholung</b></td><td><b>${nf0.format(REP.unique_km)}</b></td><td></td></tr>`;
+}
+
+// ---------- OSM ----------
+const topN = (o, skip, n = 3) => Object.entries(o || {}).filter(([k]) => !skip.includes(k)).sort((a, b) => b[1] - a[1]).slice(0, n);
+function osmSummary(w) {
+  if (!OSM || !w.osm) return '';
+  const L = OSM.labels;
+  const g = topN(w.osm.g, ['sonstiges', 'wohngebiet']).map(([k, v]) => `${L.g[k]} ${nf1.format(v)} km`);
+  const x = topN(w.osm.w, ['wohnstrasse', 'gehweg', 'fussweg']).map(([k, v]) => `${L.w[k]} ${nf1.format(v)} km`);
+  return [g.length && 'Gebiet: ' + g.join(', '), x.length && 'Wege: ' + x.join(', ')].filter(Boolean).join(' · ');
+}
+function buildOsmLegend(k) {
+  const L = OSM.labels[k], T = OSM.total[k];
+  $('olegend').innerHTML = Object.keys(L).filter(c => T[c]).map(c =>
+    `<label><input type="checkbox" data-c="${c}" ${osmOff[k].has(c) ? '' : 'checked'}><i style="background:${OSM_COL[k][c]}"></i>${L[c]}<span class="sub">${nf0.format(T[c])} km</span></label>`).join('');
+  $('olegend').onchange = e => { const c = e.target.dataset.c; e.target.checked ? osmOff[k].delete(c) : osmOff[k].add(c); redraw(); };
+  $('ohint').textContent = k === 'w'
+    ? `Wegart laut OpenStreetMap (nächster Weg ≤ ${OSM.match_m} m). Stand der Karte: ${OSM.source}.`
+    : 'Fläche, durch die der Weg führt, laut OpenStreetMap. Bei Überlappung zählt die speziellere (z. B. Spielplatz vor Park).';
+}
+function hbars(el, k, totals) {
+  const L = OSM.labels[k], ent = Object.keys(L).filter(c => totals[c]).map(c => [c, totals[c]]);
+  const max = Math.max(...ent.map(e => e[1])), sum = ent.reduce((a, e) => a + e[1], 0);
+  el.innerHTML = ent.map(([c, v]) => `<span>${L[c]}</span><span class="t"><i style="width:${(v / max * 100).toFixed(1)}%;background:${OSM_COL[k][c]}"></i></span><span class="v" title="${nf1.format(v / sum * 100)} %">${nf0.format(v)} km</span>`).join('');
+}
+async function loadOsm() {
+  try {
+    const r = await fetch('osm.json', { cache: 'no-cache' });
+    if (!r.ok) return;
+    OSM = await r.json();
+  } catch { return; }
+  const byD = new Map(OSM.walks.map(o => [o.d + '|' + o.km, o]));
+  W.forEach(w => { w.osm = byD.get(w.d + '|' + w.km); });
+  for (const k of ['w', 'g']) for (const [c, ls] of Object.entries(OSM.lines[k]))
+    osmLayers[k][c] = L.polyline(ls.map(decode), { renderer, interactive: false, color: OSM_COL[k][c], weight: c === 'sonstiges' || c === 'wohngebiet' ? 2 : 3, opacity: .9, lineCap: 'round' });
+  hbars($('h-w'), 'w', OSM.total.w); hbars($('h-g'), 'g', OSM.total.g); hbars($('h-b'), 'b', OSM.total.b);
+  $('s-osm-hint').textContent = 'Gegangene Kilometer (inkl. Wiederholungen) nach OpenStreetMap-Daten. Belag ohne Angabe gilt bei Straßen und Gehwegen als befestigt.';
+  $('s-osm').hidden = false;
+  if (state.tab === 'zeit') setIdx(state.idx); else redraw();
 }
 
 // ---------- Statistik ----------
@@ -462,6 +541,7 @@ segmented('zmode', 'zmode'); segmented('cmode', 'cmode');
   const hit = dated.findIndex(w => w.d === h);
   setIdx(hit >= 0 ? hit : dated.length - 1, hit >= 0);
   $('loading').remove();
+  loadOsm();
 })().catch(err => { $('loading').textContent = 'Daten konnten nicht geladen werden (' + err.message + ').'; });
 </script>
 </body>
