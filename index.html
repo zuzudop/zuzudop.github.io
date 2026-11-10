@@ -14,6 +14,7 @@
   --bg: #f7f6f3; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66; --line: #e4e2dc;
   --accent: #e8590c; --accent-soft: #fde7da; --trail: #1c7ed6; --bar: #1c7ed6;
   --y2020: #2f9e44; --y2021: #1c7ed6; --y2022: #ae3ec9; --y2023: #e8590c; --y0: #868e96;
+  --f1: #adb5bd; --f2: #f59f00; --f3: #e8590c; --f4: #c2255c;
   --shadow: 0 1px 3px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06);
 }
 @media (prefers-color-scheme: dark) {
@@ -21,6 +22,7 @@
     --bg: #141414; --panel: #1d1d1d; --ink: #ecebe8; --muted: #9d9b96; --line: #2f2f2e;
     --accent: #ff8a3d; --accent-soft: #3a2518; --trail: #4dabf7; --bar: #4dabf7;
     --y2020: #69db7c; --y2021: #4dabf7; --y2022: #da77f2; --y2023: #ff8a3d; --y0: #adb5bd;
+    --f1: #5c636a; --f2: #ffd43b; --f3: #ff8a3d; --f4: #f06595;
     --shadow: 0 1px 3px rgba(0,0,0,.4);
   }
 }
@@ -36,7 +38,7 @@ body {
 header { padding: 20px 20px 12px; }
 h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: -.01em; }
 .sub { color: var(--muted); font-size: 13px; }
-.kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 4px 20px 16px; }
+.kpis { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 4px 20px 16px; }
 .kpi { background: var(--bg); border-radius: 10px; padding: 10px 12px; }
 .kpi b { display: block; font-size: 19px; font-variant-numeric: tabular-nums; }
 .kpi span { color: var(--muted); font-size: 12px; }
@@ -107,7 +109,8 @@ footer { margin-top: auto; padding: 12px 20px; color: var(--muted); font-size: 1
     <div class="sub" id="period">–</div>
   </header>
   <div class="kpis">
-    <div class="kpi"><b id="k-km">–</b><span>Kilometer</span></div>
+    <div class="kpi"><b id="k-km">–</b><span>Kilometer gesamt</span></div>
+    <div class="kpi"><b id="k-uq">–</b><span id="k-uq-l">km ohne Wiederholung</span></div>
     <div class="kpi"><b id="k-n">–</b><span>Spaziergänge</span></div>
     <div class="kpi"><b id="k-h">–</b><span>Stunden</span></div>
   </div>
@@ -143,15 +146,24 @@ footer { margin-top: auto; padding: 12px 20px; color: var(--muted); font-size: 1
   <section id="karte">
     <div class="seg" id="cmode">
       <button data-v="year" aria-pressed="true">Nach Jahr</button>
+      <button data-v="freq" aria-pressed="false">Wie oft</button>
       <button data-v="heat" aria-pressed="false">Heatmap</button>
     </div>
-    <div class="legend" id="legend"></div>
-    <p class="hint">Jahre an- und abwählen, um zu sehen, welche Ecken wann dazukamen.</p>
+    <div id="leg-year">
+      <div class="legend" id="legend"></div>
+      <p class="hint">Jahre an- und abwählen, um zu sehen, welche Ecken wann dazukamen.</p>
+    </div>
+    <div id="leg-freq" hidden>
+      <div class="legend" id="flegend"></div>
+      <p class="hint" id="fhint"></p>
+    </div>
   </section>
 
   <section id="stats">
     <h2>Kilometer pro Monat</h2>
     <svg class="chart" id="c-month"></svg>
+    <h2>Wie oft gegangen</h2>
+    <table id="t-freq"></table>
     <h2>Pro Jahr</h2>
     <table id="t-year"></table>
     <h2>Nach Wochentag</h2>
@@ -225,7 +237,7 @@ L.control.scale({ imperial: false }).addTo(map);
 const renderer = L.canvas({ padding: .5, tolerance: 6 });
 
 let W = [], dated = [], state = { tab: 'zeit', idx: 0, zmode: 'cum', cmode: 'year', years: new Set(), sel: null };
-let heat = null, playTimer = null;
+let heat = null, playTimer = null, REP = null, freqLayers = [];
 
 function styleFor(w) {
   const s = state;
@@ -237,7 +249,9 @@ function styleFor(w) {
     return { color: css('--trail'), weight: 2, opacity: .85 - .5 * age };
   }
   if (s.tab === 'karte') {
-    if (s.cmode === 'heat' || !s.years.has(w.y)) return null;
+    if (s.cmode === 'heat') return null;
+    if (s.cmode === 'freq') return { color: css('--f1'), weight: 1.6, opacity: .7 };
+    if (!s.years.has(w.y)) return null;
     return { color: yearColor(w.y), weight: 2, opacity: .75 };
   }
   // Statistik / Liste: alles dezent, Auswahl hervorgehoben
@@ -253,6 +267,10 @@ function redraw() {
   }
   const cur = state.tab === 'zeit' ? dated[state.idx] : state.sel;
   if (cur && map.hasLayer(cur.layer)) cur.layer.bringToFront();
+  const wantFreq = state.tab === 'karte' && state.cmode === 'freq';
+  for (const l of freqLayers) { if (wantFreq && !map.hasLayer(l)) l.addTo(map); if (!wantFreq && map.hasLayer(l)) map.removeLayer(l); if (wantFreq) l.bringToFront(); }
+  $('leg-year').hidden = !(state.tab === 'karte' && state.cmode === 'year');
+  $('leg-freq').hidden = !wantFreq;
   const wantHeat = state.tab === 'karte' && state.cmode === 'heat';
   if (wantHeat && !heat) {
     const pts = []; for (const w of W) for (const l of w.lines) for (const p of l) pts.push(p);
@@ -268,8 +286,8 @@ function setIdx(i, fly) {
   $('slider').value = state.idx;
   const w = dated[state.idx];
   $('z-date').textContent = fmtDate(w.d, true);
-  $('z-meta').textContent = `${nf1.format(w.km)} km` + (w.min ? ` · ${fmtDur(w.min)}` : '') + (w.t ? ` · Start ${w.t} Uhr` : '') + (w.add ? ` · davon ${nf1.format(w.add)} km nachgetragen` : '');
-  $('z-cum').textContent = `Gesamt bis hier: ${nf0.format(w.cum)} km in ${state.idx + 1} Spaziergängen`;
+  $('z-meta').textContent = `${nf1.format(w.km)} km` + (w.min ? ` · ${fmtDur(w.min)}` : '') + (w.t ? ` · Start ${w.t} Uhr` : '') + (w.add ? ` · davon ${nf1.format(w.add)} km nachgetragen` : '') + (w.new != null ? ` · ${nf1.format(w.new)} km neue Wege` : '');
+  $('z-cum').textContent = `Bis hier: ${nf0.format(w.cum)} km in ${state.idx + 1} Spaziergängen` + (w.cumNew != null ? `, davon ${nf0.format(w.cumNew)} km ohne Wiederholung` : '');
   $('pos').textContent = `${state.idx + 1} / ${dated.length}`;
   history.replaceState(null, '', '#' + w.d);
   redraw();
@@ -294,6 +312,20 @@ function buildLegend() {
     return `<label><input type="checkbox" data-y="${y}" checked> <i style="background:${yearColor(y)}"></i>${y || 'ohne Datum'} <span class="sub">${nf0.format(km)} km</span></label>`;
   }).join('');
   $('legend').onchange = e => { const y = +e.target.dataset.y; e.target.checked ? state.years.add(y) : state.years.delete(y); redraw(); };
+}
+
+function buildFreq() {
+  const col = c => css('--f' + Math.min(+c, 4));
+  freqLayers = Object.entries(REP.lines).map(([c, ls]) =>
+    L.polyline(ls.map(decode), { renderer, interactive: false, color: col(c), weight: 2.5 + Math.min(+c, 4) * .5, opacity: .95, lineCap: 'round' }));
+  const kb = REP.km_by_count, km = c => Object.entries(kb).filter(([k]) => c === 4 ? +k >= 4 : +k === c).reduce((s, [, v]) => s + v, 0);
+  $('flegend').innerHTML = [[1, '1×'], [2, '2×'], [3, '3×'], [4, '4× und öfter']].map(([c, t]) =>
+    `<span><i style="background:${col(c)}"></i>${t} <span class="sub">${nf0.format(km(c))} km</span></span>`).join('');
+  $('fhint').textContent = `An wie vielen Tagen ein Wegstück gegangen wurde. Als derselbe Weg gilt, was höchstens ${REP.tol} m daneben liegt.`;
+  const tot = Object.values(kb).reduce((s, v) => s + v, 0);
+  $('t-freq').innerHTML = '<tr><th>Gegangen an</th><th>km</th><th>Anteil</th></tr>' +
+    Object.entries(kb).map(([k, v]) => `<tr><td>${k === '1' ? '1 Tag' : k + ' Tagen'}</td><td>${nf1.format(v)}</td><td>${nf1.format(v / tot * 100)} %</td></tr>`).join('') +
+    `<tr><td><b>Ohne Wiederholung</b></td><td><b>${nf0.format(REP.unique_km)}</b></td><td></td></tr>`;
 }
 
 // ---------- Statistik ----------
@@ -324,9 +356,9 @@ function buildStats() {
   barChart($('c-month'), months.map(k => ({ v: byM[k], label: k.endsWith('-01') ? k.slice(0, 4) : '', title: `${MON[+k.slice(5) - 1]} ${k.slice(0, 4)}` })));
 
   const byY = {};
-  W.forEach(w => { const k = w.y || 'ohne Datum'; (byY[k] ??= { km: 0, n: 0, min: 0 }); byY[k].km += w.km; byY[k].n += w.d ? 1 : 0; byY[k].min += w.min || 0; });
-  $('t-year').innerHTML = '<tr><th>Jahr</th><th>km</th><th>Tage</th><th>Ø km</th></tr>' +
-    Object.entries(byY).map(([k, v]) => `<tr><td>${k}</td><td>${nf0.format(v.km)}</td><td>${v.n || '–'}</td><td>${v.n ? nf1.format(v.km / v.n) : '–'}</td></tr>`).join('');
+  W.forEach(w => { const k = w.y || 'ohne Datum'; (byY[k] ??= { km: 0, n: 0, min: 0, nw: 0 }); byY[k].km += w.km; byY[k].nw += w.new || 0; byY[k].n += w.d ? 1 : 0; byY[k].min += w.min || 0; });
+  $('t-year').innerHTML = '<tr><th>Jahr</th><th>km</th><th>neu</th><th>Tage</th><th>Ø km</th></tr>' +
+    Object.entries(byY).map(([k, v]) => `<tr><td>${k}</td><td>${nf0.format(v.km)}</td><td>${nf0.format(v.nw)}</td><td>${v.n || '–'}</td><td>${v.n ? nf1.format(v.km / v.n) : '–'}</td></tr>`).join('');
 
   const wd = Array(7).fill(0); d.forEach(w => wd[(new Date(w.d + 'T12:00:00').getDay() + 6) % 7] += w.km);
   barChart($('c-wd'), wd.map((v, i) => ({ v, label: WD[i] })), { h: 110 });
@@ -348,7 +380,7 @@ function buildList() {
   $('list').innerHTML = items.map(w => `<li data-i="${w.i}" class="${w === state.sel ? 'sel' : ''}">
     <span class="d">${fmtDate(w.d)}</span><span class="k">${nf1.format(w.km)} km</span>
     <span class="bar"><i style="width:${(w.km / max * 100).toFixed(1)}%"></i></span>
-    <span class="m">${[w.t && `Start ${w.t}`, fmtDur(w.min), w.n > 1 && `${w.n} Abschnitte`, w.d && w.add && `${nf1.format(w.add)} km nachgetragen`].filter(Boolean).join(' · ') || '&nbsp;'}</span></li>`).join('');
+    <span class="m">${[w.t && `Start ${w.t}`, fmtDur(w.min), w.n > 1 && `${w.n} Abschnitte`, w.new != null && `${nf1.format(w.new)} km neu`, w.d && w.add && `${nf1.format(w.add)} km nachgetragen`].filter(Boolean).join(' · ') || '&nbsp;'}</span></li>`).join('');
 }
 function select(w, fly) {
   state.sel = w;
@@ -394,11 +426,15 @@ segmented('zmode', 'zmode'); segmented('cmode', 'cmode');
     return o;
   });
   dated = W.filter(w => w.d);
-  dated.forEach((w, i) => { w.di = i; cum += w.km; w.cum = cum; });
+  let cumNew = 0;
+  dated.forEach((w, i) => { w.di = i; cum += w.km; w.cum = cum; if (w.new != null) { cumNew += w.new; w.cumNew = cumNew; } });
 
   const total = W.reduce((s, w) => s + w.km, 0), hours = W.reduce((s, w) => s + (w.min || 0), 0) / 60;
   $('k-km').textContent = nf0.format(total);
   $('k-n').textContent = nf0.format(dated.length);
+  REP = data.rep || null;
+  if (REP) { $('k-uq').textContent = nf0.format(REP.unique_km); $('k-uq-l').title = `Strecken, die höchstens ${REP.tol} m neben einem schon gegangenen Weg liegen, zählen nur einmal`; buildFreq(); }
+  else $('k-uq').parentElement.hidden = true;
   $('k-h').textContent = nf0.format(hours);
   $('period').textContent = `${fmtDate(dated[0].d)} – ${fmtDate(dated[dated.length - 1].d)}`.replace(/^\w+\.?, /, '').replace(/– \w+\.?, /, '– ');
   $('gen').textContent = new Date(data.generated).toLocaleDateString('de-DE');
