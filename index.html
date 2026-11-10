@@ -268,7 +268,7 @@ function setIdx(i, fly) {
   $('slider').value = state.idx;
   const w = dated[state.idx];
   $('z-date').textContent = fmtDate(w.d, true);
-  $('z-meta').textContent = `${nf1.format(w.km)} km` + (w.min ? ` · ${fmtDur(w.min)}` : '') + (w.t ? ` · Start ${w.t} Uhr` : '');
+  $('z-meta').textContent = `${nf1.format(w.km)} km` + (w.min ? ` · ${fmtDur(w.min)}` : '') + (w.t ? ` · Start ${w.t} Uhr` : '') + (w.add ? ` · davon ${nf1.format(w.add)} km nachgetragen` : '');
   $('z-cum').textContent = `Gesamt bis hier: ${nf0.format(w.cum)} km in ${state.idx + 1} Spaziergängen`;
   $('pos').textContent = `${state.idx + 1} / ${dated.length}`;
   history.replaceState(null, '', '#' + w.d);
@@ -348,7 +348,7 @@ function buildList() {
   $('list').innerHTML = items.map(w => `<li data-i="${w.i}" class="${w === state.sel ? 'sel' : ''}">
     <span class="d">${fmtDate(w.d)}</span><span class="k">${nf1.format(w.km)} km</span>
     <span class="bar"><i style="width:${(w.km / max * 100).toFixed(1)}%"></i></span>
-    <span class="m">${[w.t && `Start ${w.t}`, fmtDur(w.min), w.n > 1 && `${w.n} Abschnitte`].filter(Boolean).join(' · ') || '&nbsp;'}</span></li>`).join('');
+    <span class="m">${[w.t && `Start ${w.t}`, fmtDur(w.min), w.n > 1 && `${w.n} Abschnitte`, w.d && w.add && `${nf1.format(w.add)} km nachgetragen`].filter(Boolean).join(' · ') || '&nbsp;'}</span></li>`).join('');
 }
 function select(w, fly) {
   state.sel = w;
@@ -380,7 +380,8 @@ segmented('zmode', 'zmode'); segmented('cmode', 'cmode');
 
 // ---------- Laden ----------
 (async () => {
-  const data = await fetch(DATAFILE).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+  const data = await fetch(DATAFILE, { cache: 'no-cache' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+  if (!Array.isArray(data.walks)) throw new Error('data.json hat ein altes Format – bitte mit build.py neu erzeugen und Seite neu laden');
   let cum = 0;
   W = data.walks.map((w, i) => {
     const lines = w.p.map(decode);
