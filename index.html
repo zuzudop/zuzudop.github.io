@@ -1,1 +1,427 @@
-<a href="map.html">Karte</a>
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Walking München</title>
+<meta name="description" content="Alle Spaziergänge durch München auf einer Karte – Zeitreise, Abdeckung, Statistiken.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M5 26 C10 10 16 24 27 6' fill='none' stroke='%23e8590c' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
+<style>
+:root {
+  --bg: #f7f6f3; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66; --line: #e4e2dc;
+  --accent: #e8590c; --accent-soft: #fde7da; --trail: #1c7ed6; --bar: #1c7ed6;
+  --y2020: #2f9e44; --y2021: #1c7ed6; --y2022: #ae3ec9; --y2023: #e8590c; --y0: #868e96;
+  --shadow: 0 1px 3px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141414; --panel: #1d1d1d; --ink: #ecebe8; --muted: #9d9b96; --line: #2f2f2e;
+    --accent: #ff8a3d; --accent-soft: #3a2518; --trail: #4dabf7; --bar: #4dabf7;
+    --y2020: #69db7c; --y2021: #4dabf7; --y2022: #da77f2; --y2023: #ff8a3d; --y0: #adb5bd;
+    --shadow: 0 1px 3px rgba(0,0,0,.4);
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg); color: var(--ink);
+  display: grid; grid-template-columns: 360px 1fr; height: 100dvh;
+}
+#side { overflow-y: auto; background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+#map { height: 100%; background: var(--bg); }
+header { padding: 20px 20px 12px; }
+h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: -.01em; }
+.sub { color: var(--muted); font-size: 13px; }
+.kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 4px 20px 16px; }
+.kpi { background: var(--bg); border-radius: 10px; padding: 10px 12px; }
+.kpi b { display: block; font-size: 19px; font-variant-numeric: tabular-nums; }
+.kpi span { color: var(--muted); font-size: 12px; }
+nav { display: flex; gap: 4px; padding: 0 20px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 2; }
+nav button { flex: 1; border: 0; background: none; color: var(--muted); font: inherit; font-weight: 600; padding: 10px 4px; border-bottom: 2px solid transparent; cursor: pointer; }
+nav button[aria-selected="true"] { color: var(--ink); border-color: var(--accent); }
+section { padding: 16px 20px 24px; display: none; }
+section.on { display: block; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 20px 0 8px; }
+h2:first-child { margin-top: 0; }
+.seg { display: inline-flex; background: var(--bg); border-radius: 8px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: none; font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 6px; cursor: pointer; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--panel); color: var(--ink); box-shadow: var(--shadow); }
+.row { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+input[type=range] { width: 100%; accent-color: var(--accent); margin: 14px 0 6px; }
+.btn { border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+.btn:hover { border-color: var(--muted); }
+.now { background: var(--accent-soft); border-radius: 10px; padding: 12px 14px; margin-top: 10px; }
+.now .date { font-weight: 700; font-size: 16px; }
+.now .meta { color: var(--muted); font-variant-numeric: tabular-nums; }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-top: 8px; }
+.legend i { display: inline-block; width: 14px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+.legend label { cursor: pointer; user-select: none; }
+.hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+/* Charts */
+.chart { width: 100%; height: auto; display: block; }
+.chart text { fill: var(--muted); font-size: 10px; }
+.chart .b { fill: var(--bar); }
+.chart .b:hover { fill: var(--accent); }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+td, th { padding: 5px 0; text-align: right; border-bottom: 1px solid var(--line); }
+td:first-child, th:first-child { text-align: left; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+/* Liste */
+.tools { display: flex; gap: 8px; margin-bottom: 8px; }
+.tools input { flex: 1; min-width: 0; font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
+.tools select { font: inherit; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
+ul.walks { list-style: none; margin: 0; padding: 0; }
+ul.walks li { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+ul.walks li:hover { background: var(--bg); }
+ul.walks li.sel { background: var(--accent-soft); }
+ul.walks .d { font-weight: 600; }
+ul.walks .k { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+ul.walks .m { color: var(--muted); font-size: 12px; grid-column: 1 / -1; }
+ul.walks .bar { grid-column: 1 / -1; height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
+ul.walks .bar i { display: block; height: 100%; background: var(--trail); }
+footer { margin-top: auto; padding: 12px 20px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); }
+#loading { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); z-index: 9999; font-weight: 600; color: var(--muted); }
+.leaflet-container { font: inherit; }
+.leaflet-tooltip { font: 12px system-ui, sans-serif; }
+@media (prefers-color-scheme: dark) { .leaflet-bar a, .leaflet-control-layers { background: #2a2a2a; color: #eee; } }
+@media (max-width: 760px) {
+  body { grid-template-columns: 1fr; grid-template-rows: 55dvh 1fr; }
+  #map { grid-row: 1; }
+  #side { grid-row: 2; border-right: 0; border-top: 1px solid var(--line); }
+  header { padding: 12px 16px 6px; } h1 { font-size: 17px; }
+  .kpis, nav, section { padding-left: 16px; padding-right: 16px; }
+}
+</style>
+</head>
+<body>
+<div id="loading">Lade Wege …</div>
+<aside id="side">
+  <header>
+    <h1>Walking München</h1>
+    <div class="sub" id="period">–</div>
+  </header>
+  <div class="kpis">
+    <div class="kpi"><b id="k-km">–</b><span>Kilometer</span></div>
+    <div class="kpi"><b id="k-n">–</b><span>Spaziergänge</span></div>
+    <div class="kpi"><b id="k-h">–</b><span>Stunden</span></div>
+  </div>
+  <nav role="tablist">
+    <button role="tab" data-tab="zeit" aria-selected="true">Zeitreise</button>
+    <button role="tab" data-tab="karte" aria-selected="false">Abdeckung</button>
+    <button role="tab" data-tab="stats" aria-selected="false">Statistik</button>
+    <button role="tab" data-tab="liste" aria-selected="false">Touren</button>
+  </nav>
+
+  <section id="zeit" class="on">
+    <div class="row">
+      <div class="seg" id="zmode">
+        <button data-v="cum" aria-pressed="true">Bis hierhin</button>
+        <button data-v="one" aria-pressed="false">Nur dieser Tag</button>
+      </div>
+      <button class="btn" id="play" title="Abspielen">▶︎ Abspielen</button>
+    </div>
+    <input type="range" id="slider" min="0" max="0" value="0" aria-label="Spaziergang wählen">
+    <div class="row">
+      <button class="btn" id="prev" aria-label="Vorheriger">‹</button>
+      <span class="sub" id="pos">–</span>
+      <button class="btn" id="next" aria-label="Nächster">›</button>
+    </div>
+    <div class="now">
+      <div class="date" id="z-date">–</div>
+      <div class="meta" id="z-meta">–</div>
+      <div class="meta" id="z-cum">–</div>
+    </div>
+    <p class="hint">Pfeiltasten ← → blättern, Leertaste spielt ab.</p>
+  </section>
+
+  <section id="karte">
+    <div class="seg" id="cmode">
+      <button data-v="year" aria-pressed="true">Nach Jahr</button>
+      <button data-v="heat" aria-pressed="false">Heatmap</button>
+    </div>
+    <div class="legend" id="legend"></div>
+    <p class="hint">Jahre an- und abwählen, um zu sehen, welche Ecken wann dazukamen.</p>
+  </section>
+
+  <section id="stats">
+    <h2>Kilometer pro Monat</h2>
+    <svg class="chart" id="c-month"></svg>
+    <h2>Pro Jahr</h2>
+    <table id="t-year"></table>
+    <h2>Nach Wochentag</h2>
+    <svg class="chart" id="c-wd"></svg>
+    <h2>Längste Touren</h2>
+    <table id="t-top"></table>
+  </section>
+
+  <section id="liste">
+    <div class="tools">
+      <input id="q" type="search" placeholder="Datum suchen, z. B. 2021-04">
+      <select id="sort">
+        <option value="date-desc">Neueste</option>
+        <option value="date-asc">Älteste</option>
+        <option value="km-desc">Längste</option>
+      </select>
+    </div>
+    <ul class="walks" id="list"></ul>
+  </section>
+
+  <footer>Daten: <span id="gen">–</span> · Karte © OpenStreetMap, © CARTO</footer>
+</aside>
+<div id="map"></div>
+
+<script>
+'use strict';
+const DATAFILE = 'data.json';
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const nf1 = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+const nf0 = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 });
+const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+
+function decode(str) {
+  const pts = []; let i = 0, lat = 0, lon = 0;
+  while (i < str.length) {
+    for (const k of [0, 1]) {
+      let b, s = 0, r = 0;
+      do { b = str.charCodeAt(i++) - 63; r |= (b & 31) << s; s += 5; } while (b >= 32);
+      const d = r & 1 ? ~(r >> 1) : r >> 1;
+      if (k) lon += d; else lat += d;
+    }
+    pts.push([lat / 1e5, lon / 1e5]);
+  }
+  return pts;
+}
+const fmtDate = (d, long) => {
+  if (!d) return 'ohne Datum';
+  const dt = new Date(d + 'T12:00:00');
+  return dt.toLocaleDateString('de-DE', long
+    ? { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }
+    : { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+};
+const fmtDur = m => m == null ? '' : (m >= 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min` : `${m} min`);
+const yearColor = y => css('--y' + y) || css('--y0');
+
+// ---------- Karte ----------
+const map = L.map('map', { preferCanvas: true, zoomControl: true }).setView([48.137, 11.575], 12);
+const tiles = {
+  'Hell': L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19, subdomains: 'abcd', attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, © <a href="https://carto.com/attributions">CARTO</a>' }),
+  'Dunkel': L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19, subdomains: 'abcd', attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, © <a href="https://carto.com/attributions">CARTO</a>' }),
+  'OSM': L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }),
+};
+(dark ? tiles['Dunkel'] : tiles['Hell']).addTo(map);
+L.control.layers(tiles, null, { position: 'topright' }).addTo(map);
+L.control.scale({ imperial: false }).addTo(map);
+const renderer = L.canvas({ padding: .5, tolerance: 6 });
+
+let W = [], dated = [], state = { tab: 'zeit', idx: 0, zmode: 'cum', cmode: 'year', years: new Set(), sel: null };
+let heat = null, playTimer = null;
+
+function styleFor(w) {
+  const s = state;
+  if (s.tab === 'zeit') {
+    const i = w.di;
+    if (i == null || i > s.idx || (s.zmode === 'one' && i !== s.idx)) return null;
+    if (i === s.idx) return { color: css('--accent'), weight: 4.5, opacity: 1 };
+    const age = (s.idx - i) / Math.max(1, s.idx);
+    return { color: css('--trail'), weight: 2, opacity: .85 - .5 * age };
+  }
+  if (s.tab === 'karte') {
+    if (s.cmode === 'heat' || !s.years.has(w.y)) return null;
+    return { color: yearColor(w.y), weight: 2, opacity: .75 };
+  }
+  // Statistik / Liste: alles dezent, Auswahl hervorgehoben
+  if (w === s.sel) return { color: css('--accent'), weight: 5, opacity: 1 };
+  return { color: css('--trail'), weight: 1.6, opacity: s.sel ? .25 : .6 };
+}
+function redraw() {
+  for (const w of W) {
+    const st = styleFor(w);
+    if (!st) { if (map.hasLayer(w.layer)) map.removeLayer(w.layer); continue; }
+    w.layer.setStyle(st);
+    if (!map.hasLayer(w.layer)) w.layer.addTo(map);
+  }
+  const cur = state.tab === 'zeit' ? dated[state.idx] : state.sel;
+  if (cur && map.hasLayer(cur.layer)) cur.layer.bringToFront();
+  const wantHeat = state.tab === 'karte' && state.cmode === 'heat';
+  if (wantHeat && !heat) {
+    const pts = []; for (const w of W) for (const l of w.lines) for (const p of l) pts.push(p);
+    heat = L.heatLayer(pts, { radius: 6, blur: 8, minOpacity: .35, max: 1,
+      gradient: { .3: '#1c7ed6', .6: '#ae3ec9', .85: '#e8590c', 1: '#ffd43b' } });
+  }
+  if (heat) { if (wantHeat && !map.hasLayer(heat)) heat.addTo(map); if (!wantHeat && map.hasLayer(heat)) map.removeLayer(heat); }
+}
+
+// ---------- Zeitreise ----------
+function setIdx(i, fly) {
+  state.idx = Math.max(0, Math.min(dated.length - 1, i));
+  $('slider').value = state.idx;
+  const w = dated[state.idx];
+  $('z-date').textContent = fmtDate(w.d, true);
+  $('z-meta').textContent = `${nf1.format(w.km)} km` + (w.min ? ` · ${fmtDur(w.min)}` : '') + (w.t ? ` · Start ${w.t} Uhr` : '');
+  $('z-cum').textContent = `Gesamt bis hier: ${nf0.format(w.cum)} km in ${state.idx + 1} Spaziergängen`;
+  $('pos').textContent = `${state.idx + 1} / ${dated.length}`;
+  history.replaceState(null, '', '#' + w.d);
+  redraw();
+  if (fly) map.flyToBounds(w.bounds, { padding: [40, 40], maxZoom: 15, duration: .6 });
+}
+function togglePlay(force) {
+  const on = force ?? !playTimer;
+  if (playTimer) { clearInterval(playTimer); playTimer = null; }
+  if (on) {
+    if (state.idx >= dated.length - 1) setIdx(0);
+    playTimer = setInterval(() => { if (state.idx >= dated.length - 1) return togglePlay(false); setIdx(state.idx + 1); }, 180);
+  }
+  $('play').textContent = playTimer ? '❚❚ Pause' : '▶︎ Abspielen';
+}
+
+// ---------- Abdeckung ----------
+function buildLegend() {
+  const years = [...new Set(W.map(w => w.y))].sort((a, b) => (a === 0) - (b === 0) || a - b);
+  years.forEach(y => state.years.add(y));
+  $('legend').innerHTML = years.map(y => {
+    const km = W.filter(w => w.y === y).reduce((s, w) => s + w.km, 0);
+    return `<label><input type="checkbox" data-y="${y}" checked> <i style="background:${yearColor(y)}"></i>${y || 'ohne Datum'} <span class="sub">${nf0.format(km)} km</span></label>`;
+  }).join('');
+  $('legend').onchange = e => { const y = +e.target.dataset.y; e.target.checked ? state.years.add(y) : state.years.delete(y); redraw(); };
+}
+
+// ---------- Statistik ----------
+function barChart(svg, data, { h = 140, labelEvery = 1, fmt = v => nf0.format(v) + ' km' } = {}) {
+  const w = 320, pad = { l: 34, r: 14, t: 8, b: 18 }, iw = w - pad.l - pad.r, ih = h - pad.t - pad.b;
+  const max = Math.max(...data.map(d => d.v)) || 1;
+  const step = Math.pow(10, Math.floor(Math.log10(max))); const nice = Math.ceil(max / step) * step;
+  const bw = iw / data.length;
+  let s = '';
+  for (const f of [0, .5, 1]) {
+    const y = pad.t + ih - f * ih;
+    s += `<line x1="${pad.l}" x2="${w - pad.r}" y1="${y}" y2="${y}" stroke="var(--line)"/><text x="${pad.l - 4}" y="${y + 3}" text-anchor="end">${nf0.format(nice * f)}</text>`;
+  }
+  data.forEach((d, i) => {
+    const bh = d.v / nice * ih, x = pad.l + i * bw;
+    s += `<rect class="b" x="${x + bw * .12}" y="${pad.t + ih - bh}" width="${Math.max(1, bw * .76)}" height="${bh}" rx="1.5"><title>${d.title || d.label}: ${fmt(d.v)}</title></rect>`;
+    if (d.label && i % labelEvery === 0) s += `<text x="${x + bw / 2}" y="${h - 4}" text-anchor="middle">${d.label}</text>`;
+  });
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`); svg.innerHTML = s;
+}
+function buildStats() {
+  const d = dated; if (!d.length) return;
+  const first = d[0].d.slice(0, 7), last = d[d.length - 1].d.slice(0, 7);
+  const months = []; let [y, m] = first.split('-').map(Number);
+  while (`${y}-${String(m).padStart(2, '0')}` <= last) { months.push(`${y}-${String(m).padStart(2, '0')}`); if (++m > 12) { m = 1; y++; } }
+  const byM = Object.fromEntries(months.map(k => [k, 0]));
+  d.forEach(w => byM[w.d.slice(0, 7)] += w.km);
+  barChart($('c-month'), months.map(k => ({ v: byM[k], label: k.endsWith('-01') ? k.slice(0, 4) : '', title: `${MON[+k.slice(5) - 1]} ${k.slice(0, 4)}` })));
+
+  const byY = {};
+  W.forEach(w => { const k = w.y || 'ohne Datum'; (byY[k] ??= { km: 0, n: 0, min: 0 }); byY[k].km += w.km; byY[k].n += w.d ? 1 : 0; byY[k].min += w.min || 0; });
+  $('t-year').innerHTML = '<tr><th>Jahr</th><th>km</th><th>Tage</th><th>Ø km</th></tr>' +
+    Object.entries(byY).map(([k, v]) => `<tr><td>${k}</td><td>${nf0.format(v.km)}</td><td>${v.n || '–'}</td><td>${v.n ? nf1.format(v.km / v.n) : '–'}</td></tr>`).join('');
+
+  const wd = Array(7).fill(0); d.forEach(w => wd[(new Date(w.d + 'T12:00:00').getDay() + 6) % 7] += w.km);
+  barChart($('c-wd'), wd.map((v, i) => ({ v, label: WD[i] })), { h: 110 });
+
+  const top = [...d].sort((a, b) => b.km - a.km).slice(0, 8);
+  $('t-top').innerHTML = top.map(w => `<tr data-d="${w.d}" style="cursor:pointer"><td>${fmtDate(w.d)}</td><td>${nf1.format(w.km)} km</td><td>${fmtDur(w.min)}</td></tr>`).join('');
+  $('t-top').onclick = e => { const tr = e.target.closest('tr[data-d]'); if (tr) select(W.find(w => w.d === tr.dataset.d), true); };
+}
+
+// ---------- Liste ----------
+function buildList() {
+  const q = $('q').value.trim(), [key, dir] = $('sort').value.split('-');
+  const max = Math.max(...W.map(w => w.km));
+  let items = W.filter(w => !q || (w.d || 'ohne datum').includes(q.toLowerCase()) || fmtDate(w.d).includes(q));
+  items.sort((a, b) => {
+    const v = key === 'km' ? a.km - b.km : (a.d || '0').localeCompare(b.d || '0');
+    return dir === 'desc' ? -v : v;
+  });
+  $('list').innerHTML = items.map(w => `<li data-i="${w.i}" class="${w === state.sel ? 'sel' : ''}">
+    <span class="d">${fmtDate(w.d)}</span><span class="k">${nf1.format(w.km)} km</span>
+    <span class="bar"><i style="width:${(w.km / max * 100).toFixed(1)}%"></i></span>
+    <span class="m">${[w.t && `Start ${w.t}`, fmtDur(w.min), w.n > 1 && `${w.n} Abschnitte`].filter(Boolean).join(' · ') || '&nbsp;'}</span></li>`).join('');
+}
+function select(w, fly) {
+  state.sel = w;
+  if (state.tab !== 'liste' && state.tab !== 'stats') setTab('liste');
+  document.querySelectorAll('#list li').forEach(li => li.classList.toggle('sel', +li.dataset.i === w.i));
+  if (w.d) history.replaceState(null, '', '#' + w.d);
+  redraw();
+  if (fly) map.flyToBounds(w.bounds, { padding: [40, 40], maxZoom: 16, duration: .6 });
+}
+
+// ---------- Tabs ----------
+function setTab(t) {
+  state.tab = t;
+  document.querySelectorAll('nav button').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === t));
+  document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === t));
+  if (t !== 'zeit') togglePlay(false);
+  redraw();
+}
+document.querySelector('nav').onclick = e => { const b = e.target.closest('button'); if (b) setTab(b.dataset.tab); };
+function segmented(id, key) {
+  $(id).onclick = e => {
+    const b = e.target.closest('button'); if (!b) return;
+    state[key] = b.dataset.v;
+    $(id).querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b));
+    redraw();
+  };
+}
+segmented('zmode', 'zmode'); segmented('cmode', 'cmode');
+
+// ---------- Laden ----------
+(async () => {
+  const data = await fetch(DATAFILE).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+  let cum = 0;
+  W = data.walks.map((w, i) => {
+    const lines = w.p.map(decode);
+    const layer = L.polyline(lines, { renderer, interactive: true, lineCap: 'round', lineJoin: 'round' });
+    const o = { ...w, i, lines, layer, y: w.d ? +w.d.slice(0, 4) : 0, bounds: layer.getBounds() };
+    layer.bindTooltip(() => `<b>${fmtDate(o.d)}</b><br>${nf1.format(o.km)} km${o.min ? ' · ' + fmtDur(o.min) : ''}`, { sticky: true });
+    layer.on('click', () => {
+      if (state.tab === 'zeit' && o.di != null) setIdx(o.di); else select(o);
+    });
+    return o;
+  });
+  dated = W.filter(w => w.d);
+  dated.forEach((w, i) => { w.di = i; cum += w.km; w.cum = cum; });
+
+  const total = W.reduce((s, w) => s + w.km, 0), hours = W.reduce((s, w) => s + (w.min || 0), 0) / 60;
+  $('k-km').textContent = nf0.format(total);
+  $('k-n').textContent = nf0.format(dated.length);
+  $('k-h').textContent = nf0.format(hours);
+  $('period').textContent = `${fmtDate(dated[0].d)} – ${fmtDate(dated[dated.length - 1].d)}`.replace(/^\w+\.?, /, '').replace(/– \w+\.?, /, '– ');
+  $('gen').textContent = new Date(data.generated).toLocaleDateString('de-DE');
+
+  const all = L.latLngBounds([]); W.forEach(w => all.extend(w.bounds));
+  map.fitBounds(all, { padding: [20, 20] });
+
+  $('slider').max = dated.length - 1;
+  $('slider').oninput = e => { togglePlay(false); setIdx(+e.target.value); };
+  $('prev').onclick = () => { togglePlay(false); setIdx(state.idx - 1, true); };
+  $('next').onclick = () => { togglePlay(false); setIdx(state.idx + 1, true); };
+  $('play').onclick = () => togglePlay();
+  document.addEventListener('keydown', e => {
+    if (state.tab !== 'zeit' || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) && e.target.type !== 'range') return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); togglePlay(false); setIdx(state.idx - 1); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); togglePlay(false); setIdx(state.idx + 1); }
+    if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+  });
+  $('q').oninput = buildList; $('sort').onchange = buildList;
+  $('list').onclick = e => { const li = e.target.closest('li'); if (li) select(W[+li.dataset.i], true); };
+
+  buildLegend(); buildStats(); buildList();
+
+  const h = decodeURIComponent(location.hash.slice(1));
+  const hit = dated.findIndex(w => w.d === h);
+  setIdx(hit >= 0 ? hit : dated.length - 1, hit >= 0);
+  $('loading').remove();
+})().catch(err => { $('loading').textContent = 'Daten konnten nicht geladen werden (' + err.message + ').'; });
+</script>
+</body>
+</html>
