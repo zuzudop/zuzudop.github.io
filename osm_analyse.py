@@ -4,9 +4,11 @@ Walking München – OSM-Auswertung
 
 Ordnet jeden gegangenen Meter einer Wegart (Gehweg, Pfad, Straße …), einem
 Belag und einem Gebiet (Friedhof, Spielplatz, Park …) aus OpenStreetMap zu.
+Wertet außerdem die Stadtbezirke (admin_level 9) und Bezirksteile (10) aus:
+gegangene km und Abdeckung des Wegenetzes je Bezirk.
 
 Eingaben:  data.json (von build.py) und ein OSM-Auszug als .osm.pbf
-Ausgabe:   osm.json (wird von index.html geladen, falls vorhanden)
+Ausgabe:   osm.json und grenze.json (werden von index.html geladen)
 
 Benötigt:  pip install numpy scipy matplotlib protobuf
 Aufruf:    python osm_analyse.py Muenchen.osm.pbf
@@ -14,6 +16,7 @@ Aufruf:    python osm_analyse.py Muenchen.osm.pbf
 import argparse
 import json
 import math
+import os
 import sys
 import time
 from collections import defaultdict
@@ -42,7 +45,7 @@ WEGART = [  # (Schlüssel, Bezeichnung)
     ("feldweg", "Feld-/Waldweg"),
     ("wohnstrasse", "Wohn-/Nebenstraße"),
     ("hauptstrasse", "Hauptstraße"),
-    ("keiner", "kein Weg in OSM"),
+    ("keiner", "Kein Weg in OSM"),
 ]
 GEBIET = [  # Reihenfolge = Vorrang bei Überlappung
     ("spielplatz", "Spielplatz"),
@@ -57,9 +60,46 @@ GEBIET = [  # Reihenfolge = Vorrang bei Überlappung
     ("gewerbe", "Gewerbe/Industrie"),
     ("bahn", "Bahngelände"),
     ("wohngebiet", "Wohngebiet"),
-    ("sonstiges", "ohne Flächenangabe"),
+    ("sonstiges", "Ohne Flächenangabe"),
 ]
-BELAG = [("fest", "befestigt"), ("lose", "unbefestigt"), ("unbekannt", "unbekannt")]
+BELAG = [("fest", "Befestigt"), ("lose", "Unbefestigt"), ("unbekannt", "Unbekannt")]
+BESOND = [  # Eigenschaften des Weges selbst, quer zu Wegart und Gebiet (Reihenfolge = Vorrang)
+    ("bahnsteig", "Bahnsteig"),
+    ("unterirdisch", "Tunnel/unterirdisch"),
+    ("innen", "Innenraum/Passage"),
+    ("bruecke", "Brücke/Steg"),
+    ("querung", "Straßenquerung"),
+    ("zugang", "Eingeschränkter Zugang"),
+    ("keine", "Ohne Besonderheit"),
+]
+
+
+def _ebene(v):
+    """Kleinste Zahl aus layer/level ("-1", "-2;-1", "0.5") oder None."""
+    try:
+        return min(float(x) for x in v.replace(",", ";").split(";") if x.strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def besonderheit(t):
+    if t.get("public_transport") == "platform" or t.get("railway") == "platform":
+        return "bahnsteig"
+    lay, lev = _ebene(t.get("layer")), _ebene(t.get("level"))
+    if t.get("tunnel") in ("yes", "culvert") or t.get("location") == "underground" or \
+            (lev is not None and lev < 0) or (lay is not None and lay < 0 and not t.get("bridge")):
+        return "unterirdisch"
+    if t.get("indoor") in ("yes", "corridor") or t.get("tunnel") == "building_passage" or \
+            t.get("covered") in ("yes", "arcade", "colonnade"):
+        return "innen"
+    if t.get("bridge") not in (None, "no"):
+        return "bruecke"
+    if t.get("footway") == "crossing" or t.get("cycleway") == "crossing" or t.get("path") == "crossing":
+        return "querung"
+    if t.get("access") in ("customers", "destination", "permit", "delivery", "agricultural", "forestry") or \
+            t.get("foot") in ("customers", "destination", "permit"):
+        return "zugang"
+    return "keine"
 G_PRIO = {k: i for i, (k, _) in enumerate(GEBIET)}
 
 PAVED = {"asphalt", "paved", "paving_stones", "concrete", "concrete:plates", "concrete:lanes", "sett",
@@ -72,6 +112,18 @@ ROADS_MAIN = {"motorway", "trunk", "primary", "secondary", "tertiary", "motorway
 ROADS_MINOR = {"residential", "living_street", "service"}
 SKIP_HW = {"proposed", "construction", "abandoned", "platform", "bus_stop", "elevator", "corridor",
            "razed", "disused", "raceway", "emergency_bay", "rest_area", "services"}
+# Für die Abdeckung je Bezirk nicht mitgezählt (zu Fuß nicht begehbar bzw. kein echter Weg)
+NO_FOOT_HW = {"motorway", "motorway_link", "trunk", "trunk_link"}
+NO_FOOT_SERVICE = {"parking_aisle", "driveway", "drive-through"}
+
+
+def begehbar(t):
+    hw = t.get("highway")
+    if hw in NO_FOOT_HW or t.get("service") in NO_FOOT_SERVICE or t.get("foot") == "no":
+        return False
+    if t.get("access") in ("private", "no") and t.get("foot") not in ("yes", "designated", "permissive"):
+        return False
+    return True
 
 
 def wegart(t):
@@ -233,6 +285,209 @@ def assemble_rings(ways):
     return rings
 
 
+def write_json(path, obj):
+    """Über eine Zwischendatei schreiben und ersetzen; unter Windows kann die
+    Zieldatei kurz gesperrt sein (z. B. während ein Webserver sie ausliefert)."""
+    path = Path(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    for versuch in range(20):
+        try:
+            os.replace(tmp, path)
+            return
+        except OSError:
+            time.sleep(0.5)
+    sys.exit(f"{path.name} ist gesperrt – Ergebnis liegt in {tmp.name}")
+
+
+def ring_area(xy):
+    """Fläche eines Rings in m² (Gauß'sche Trapezformel)."""
+    x, y = xy[:, 0], xy[:, 1]
+    return abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))) / 2
+
+
+def ring_centroid(xy):
+    x, y = xy[:, 0], xy[:, 1]
+    c = x * np.roll(y, -1) - np.roll(x, -1) * y
+    A = c.sum() / 2
+    if abs(A) < 1e-9:
+        return xy.mean(0)
+    return np.array([((x + np.roll(x, -1)) * c).sum() / (6 * A), ((y + np.roll(y, -1)) * c).sum() / (6 * A)])
+
+
+def assign(pts, polys):
+    """Index des ersten Polygons, in dem jeder Punkt liegt (-1 = keins)."""
+    res = np.full(len(pts), -1, np.int32)
+    order = np.argsort(pts[:, 0])
+    xs = pts[order, 0]
+    for k, p in enumerate(polys):
+        a0, a1 = np.searchsorted(xs, [p["lo"][0], p["hi"][0]])
+        cand = order[a0:a1]
+        cand = cand[(res[cand] < 0) & (pts[cand, 1] >= p["lo"][1]) & (pts[cand, 1] <= p["hi"][1])]
+        if not len(cand):
+            continue
+        q = pts[cand]
+        inside = np.zeros(len(cand), bool)
+        for mp in p["op"]:
+            inside ^= mp.contains_points(q)
+        for mp in p["ip"]:
+            inside &= ~mp.contains_points(q)
+        res[cand[inside]] = k
+    return res
+
+
+LUECKE_KATS = (("w", WEGART, "a"), ("g", GEBIET, "g"), ("x", BESOND, "x"))   # Aufteilung nach Wegart/Gebiet/Besonderheit
+
+
+def luecken_auswertung(NET, in_city, SX, match, log):
+    """Begehbare OSM-Wege in der Stadt, an denen kein Spaziergang ≤ match m
+    vorbeiführt („Abweichung zu OSM“): Linien und km je Wegart und je Gebiet."""
+    NP, NL, NW = NET["p"], NET["l"], NET["w"]
+    dist, _ = cKDTree(SX).query(NP[in_city], distance_upper_bound=match)
+    gap = np.zeros(len(NP), bool)
+    gap[np.flatnonzero(in_city)[~np.isfinite(dist)]] = True
+    out = {"match_m": match}
+    fmt = lambda cats, v: {k: round(float(v[i]), 1) for i, (k, _) in enumerate(cats) if v[i] >= .05}
+    for key, cats, col in LUECKE_KATS:
+        C = NET[col]
+        sums = lambda sel: np.bincount(C[sel], weights=NL[sel], minlength=len(cats)) / 1000
+        netz, luecke = sums(in_city), sums(gap)
+        # zusammenhängende Lücken je OSM-Weg und Kategorie als Linien (ab 10 m, kürzere sind meist Querungen)
+        brk = np.flatnonzero((np.diff(gap) != 0) | (np.diff(NW) != 0) | (np.diff(C) != 0)) + 1
+        starts = np.concatenate([[0], brk]); ends = np.concatenate([brk, [len(gap)]])
+        lines, n_kurz = defaultdict(list), 0
+        for s0, e0 in zip(starts, ends):
+            if not gap[s0]:
+                continue
+            if NL[s0:e0].sum() < 10:
+                n_kurz += 1
+                continue
+            e1 = e0 + 1 if e0 < len(gap) and NW[e0] == NW[s0] else e0   # bis zum nächsten Punkt verlängern
+            lines[cats[int(C[s0])][0]].append(encode(simplify([(y / KY, x / KX) for x, y in NP[s0:e1]], 2.0)))
+        out[key] = {"netz": fmt(cats, netz), "luecke": fmt(cats, luecke), "lines": dict(lines)}
+        log(f"Abweichung zu OSM ({key}): {luecke.sum():,.0f} von {netz.sum():,.0f} km begehbarer Wege nicht ≤ {match:g} m "
+            f"gegangen ({sum(map(len, lines.values())):,} Stücke, {n_kurz:,} unter 10 m weggelassen)")
+    return out, gap
+
+
+def luecken_je_gebiet(NET, in_city, gap, ps):
+    """km begehbares Netz und nicht gegangene km je Bezirk, nach Wegart und nach Gebiet."""
+    NP, NL = NET["p"], NET["l"]
+    pidx = np.flatnonzero(in_city)
+    na = assign(NP[pidx], ps)
+    m = na >= 0
+    ii, kk = pidx[m], na[m].astype(np.int64)
+    rows = [{} for _ in ps]
+    G = gap[ii]
+    for key, cats, col in LUECKE_KATS:
+        C, nc = NET[col][ii], len(cats)
+        def mat(sel):
+            return np.bincount(kk[sel] * nc + C[sel], weights=NL[ii][sel], minlength=len(ps) * nc).reshape(len(ps), nc) / 1000
+        M = {"netz": mat(np.ones(len(ii), bool)), "luecke": mat(G)}
+        fmt = lambda row: {cats[j][0]: round(float(v), 2) for j, v in enumerate(row) if v >= .005}
+        for k in range(len(ps)):
+            rows[k][key] = {n: fmt(m[k]) for n, m in M.items()}
+    return rows
+
+
+def bezirks_auswertung(admin, member_refs, coords, a, SX, SLEN, SW, is_new, walks, NET, kats, log):
+    """Stadtgrenze → grenze.json; je Stadtbezirk/Bezirksteil: Fläche, gegangene
+    km, erster Besuch und km je Wegart/Gebiet/Belag. Dazu die „Abweichung zu
+    OSM“ (nicht gegangene begehbare Wege in der Stadt)."""
+    def build(b):
+        outer = [member_refs[i].tolist() for i, role in b["mem"] if role in ("outer", "") and i in member_refs]
+        inner = [member_refs[i].tolist() for i, role in b["mem"] if role == "inner" and i in member_refs]
+        op = [coords(np.array(r)) for r in assemble_rings(outer)]
+        ip = [coords(np.array(r)) for r in assemble_rings(inner)]
+        if not op or any(c is None for c in op):
+            return None
+        ip = [c for c in ip if c is not None]
+        allc = np.vstack(op)
+        big = max(op, key=ring_area)
+        return {**b, "op_xy": op, "op": [MPath(c) for c in op], "ip": [MPath(c) for c in ip],
+                "lo": allc.min(0), "hi": allc.max(0), "c": ring_centroid(big),
+                "area": sum(ring_area(c) for c in op) - sum(ring_area(c) for c in ip)}
+
+    def to_ll(xy, tol):
+        return encode(simplify([(y / KY, x / KX) for x, y in xy], tol))
+
+    polys = [p for p in (build(b) for b in admin) if p]
+    stadt = next((p for p in polys if p["level"] == 6), None)
+    if stadt:
+        write_json(a.grenze, {"name": a.stadt, "rings": [to_ll(c, 5.0) for c in stadt["op_xy"]]})
+        log(f"Stadtgrenze {a.stadt} → {Path(a.grenze).name}")
+    else:
+        log(f"Stadtgrenze {a.stadt} nicht gefunden")
+
+    def in_stadt(p):
+        if not stadt:
+            return True
+        return any(mp.contains_point(p["c"]) for mp in stadt["op"])
+
+    # Abweichung zu OSM: begehbare Wege in der Stadt (ohne Stadtgrenze: im ganzen Bereich)
+    in_city = assign(NET["p"], [stadt]) >= 0 if stadt else np.ones(len(NET["p"]), bool)
+    luecken, gap = luecken_auswertung(NET, in_city, SX, a.match, log)
+    luecken["bezirke"] = {}
+
+    if not any(p["level"] in (9, 10) for p in polys):
+        return None, luecken
+
+    dates = [w["d"] for w in walks]
+    # Namen der Bezirksteile (von bezirksteil_namen.py), da OSM meist nur Nummern hat
+    nf = Path(a.out).resolve().parent / "bezirksteile.json"
+    teil_namen = json.loads(nf.read_text(encoding="utf-8")) if nf.exists() else {}
+    for p in polys:
+        if p["level"] == 10 and not p["name"]:
+            p["name"] = teil_namen.get(p["ref"], "")
+    out = {}
+    for lvl in (9, 10):
+        ps = [p for p in polys if p["level"] == lvl and in_stadt(p)]
+        ps.sort(key=lambda p: (p["ref"].zfill(5), p["name"]))
+        if not ps:
+            continue
+        luecken["bezirke"][str(lvl)] = luecken_je_gebiet(NET, in_city, gap, ps)   # gleiche Reihenfolge wie osm.json
+        sa = assign(SX, ps)
+        s = sa >= 0
+        km = np.bincount(sa[s], weights=SLEN[s], minlength=len(ps)) / 1000
+        sn = s & is_new
+        kmn = np.bincount(sa[sn], weights=SLEN[sn], minlength=len(ps)) / 1000
+        # km je (Bezirk, Spaziergang) → Anzahl Spaziergänge (≥ 100 m) und erster Besuch
+        key = sa[s].astype(np.int64) * len(walks) + SW[s]
+        per = np.bincount(key, weights=SLEN[s], minlength=len(ps) * len(walks)).reshape(len(ps), len(walks))
+        # km je Kategorie (w/g/b) im Gebiet, mit und ohne Wiederholung (Suffix n)
+        kat = [{} for _ in ps]
+        for kk, cats, arr in kats:
+            for mask, suf in ((s, ""), (sn, "n")):
+                M = np.bincount(sa[mask].astype(np.int64) * len(cats) + arr[mask], weights=SLEN[mask],
+                                minlength=len(ps) * len(cats)).reshape(len(ps), len(cats)) / 1000
+                for k in range(len(ps)):
+                    kat[k][kk + suf] = {cats[j][0]: round(float(v), 2) for j, v in enumerate(M[k]) if v >= 0.005}
+        rows = []
+        for k, p in enumerate(ps):
+            vis = [wi for wi in np.flatnonzero(per[k] >= 100) if dates[wi]]
+            rows.append({
+                "name": p["name"], "ref": p["ref"], "wikidata": p["wikidata"],
+                "km2": round(p["area"] / 1e6, 3),
+                "km": round(float(km[k]), 2), "kmn": round(float(kmn[k]), 2),
+                "n": len(vis), "first": min(dates[wi] for wi in vis) if vis else None,
+                "rings": [to_ll(c, 5.0) for c in p["op_xy"]],
+                **kat[k],
+                "_c": p["c"],
+            })
+        out[str(lvl)] = rows
+        log(f"admin_level {lvl}: {len(rows)} Gebiete")
+    # Bezirksteil → Stadtbezirk (über den Schwerpunkt)
+    if "9" in out and "10" in out:
+        bz = [p for p in polys if p["level"] == 9 and in_stadt(p)]
+        bz.sort(key=lambda p: (p["ref"].zfill(5), p["name"]))
+        for r in out["10"]:
+            r["bz"] = next((k for k, p in enumerate(bz) if any(mp.contains_point(r["_c"]) for mp in p["op"])), None)
+    for rows in out.values():
+        for r in rows:
+            del r["_c"]
+    return out, luecken
+
+
 # ---------------------------------------------------------------- Hauptteil
 def main():
     here = Path(__file__).resolve().parent
@@ -241,6 +496,8 @@ def main():
     ap.add_argument("--data", default=str(here / "data.json"))
     ap.add_argument("-o", "--out", default=str(here / "osm.json"))
     ap.add_argument("--match", type=float, default=12.0, help="max. Abstand zu einem OSM-Weg in m (Standard 12)")
+    ap.add_argument("--stadt", default="München", help="Name der Stadt (Grenze admin_level 6, Standard München)")
+    ap.add_argument("--grenze", default=str(here / "grenze.json"), help="Ausgabe der Stadtgrenze")
     a = ap.parse_args()
     T = time.time()
     log = lambda *x: print(f"[{time.time() - T:5.1f}s]", *x, file=sys.stderr)
@@ -253,24 +510,33 @@ def main():
     w_, e = allpts[:, 1].min() - .015, allpts[:, 1].max() + .015
     log(f"{len(walks)} Spaziergänge, Bereich {s:.3f}–{n:.3f} N, {w_:.3f}–{e:.3f} O")
 
-    # --- Durchlauf 1: Relationen (Multipolygone)
-    rels = []
+    # --- Durchlauf 1: Relationen (Multipolygone, Verwaltungsgrenzen)
+    rels, admin = [], []
     need_ways = set()
     for pb in osmpbf.blocks(a.pbf):
         st = pb.stringtable.s
         for g in pb.primitivegroup:
             for r in g.relations:
                 t = {st[k].decode(): st[v].decode() for k, v in zip(r.keys, r.vals)}
-                if t.get("type") != "multipolygon":
-                    continue
-                cat = gebiet(t)
-                if not cat:
+                lvl = t.get("admin_level")
+                if t.get("boundary") == "administrative" and (lvl in ("9", "10") or (lvl == "6" and t.get("name") == a.stadt)):
+                    cat = None
+                elif t.get("type") == "multipolygon":
+                    cat = gebiet(t)
+                    if not cat:
+                        continue
+                else:
                     continue
                 ids = np.cumsum(np.fromiter(r.memids, np.int64, len(r.memids)))
                 mem = [(int(i), st[rs].decode()) for i, rs, ty in zip(ids, r.roles_sid, r.types) if ty == 1]
-                rels.append((cat, mem))
+                if cat:
+                    rels.append((cat, mem))
+                else:
+                    admin.append({"level": int(lvl), "name": t.get("name", ""), "ref": t.get("ref", ""),
+                                  "wikidata": t.get("wikidata", ""), "mem": mem})
                 need_ways.update(i for i, _ in mem)
-    log(f"{len(rels)} Gebiets-Relationen")
+    log(f"{len(rels)} Gebiets-Relationen, {sum(b['level'] == 9 for b in admin)} Stadtbezirke, "
+        f"{sum(b['level'] == 10 for b in admin)} Bezirksteile")
 
     # --- Durchlauf 2: Knoten im Bereich, Wege, Flächen
     nid, nlat, nlon = [], [], []
@@ -294,7 +560,7 @@ def main():
                     if refs is None:
                         refs = np.cumsum(np.fromiter(wy.refs, np.int64, len(wy.refs)))
                     art = wegart(t)
-                    hw_ways.append((refs, art, belag(t, art)))
+                    hw_ways.append((refs, art, belag(t, art), begehbar(t), besonderheit(t)))
                 if any(k in t for k in AREA_KEYS):
                     cat = gebiet(t)
                     if cat:
@@ -305,6 +571,25 @@ def main():
     nid = np.concatenate(nid); nlat = np.concatenate(nlat); nlon = np.concatenate(nlon)
     o = np.argsort(nid); nid, nlat, nlon = nid[o], nlat[o], nlon[o]
     log(f"{len(nid):,} Knoten, {len(hw_ways):,} Wege, {len(area_ways):,} Flächen")
+
+    # --- Knoten der Stadtgrenze außerhalb des Spaziergang-Bereichs nachladen
+    #     (nur falls nötig; Bezirke von Nachbarorten werden nicht gebraucht)
+    adm_ids = [member_refs[i] for b in admin if b["level"] == 6 for i, _ in b["mem"] if i in member_refs]
+    if adm_ids:
+        adm_ids = np.unique(np.concatenate(adm_ids))
+        miss = adm_ids[~np.isin(adm_ids, nid)]
+        if len(miss):
+            log(f"lade {len(miss):,} Grenzknoten außerhalb des Bereichs nach …")
+            add = [(nid, nlat, nlon)]
+            for pb in osmpbf.blocks(a.pbf):
+                for g in pb.primitivegroup:
+                    if g.HasField("dense") and len(g.dense.id):
+                        ids, la, lo = osmpbf.dense_nodes(pb, g)
+                        m = np.isin(ids, miss)
+                        if m.any():
+                            add.append((ids[m], la[m], lo[m]))
+            nid, nlat, nlon = (np.concatenate(x) for x in zip(*add))
+            o = np.argsort(nid); nid, nlat, nlon = nid[o], nlat[o], nlon[o]
 
     def coords(refs):
         i = np.searchsorted(nid, refs)
@@ -317,8 +602,10 @@ def main():
     # --- OSM-Wege verdichten und indexieren
     W_IDX = {k: i for i, (k, _) in enumerate(WEGART)}
     B_IDX = {k: i for i, (k, _) in enumerate(BELAG)}
-    P, PA, PB = [], [], []
-    for refs, art, bel in hw_ways:
+    X_IDX = {k: i for i, (k, _) in enumerate(BESOND)}
+    P, PA, PB, PX = [], [], [], []
+    NP, NL, NA, NWY, NX = [], [], [], [], []  # begehbares Wegenetz alle 5 m: Punkt, Länge, Wegart, Weg-Nr., Besonderheit
+    for wno, (refs, art, bel, foot, bes) in enumerate(hw_ways):
         i = np.searchsorted(nid, refs)
         i[i >= len(nid)] = 0
         ok = nid[i] == refs
@@ -330,7 +617,16 @@ def main():
         P.append(pts)
         PA.append(np.full(len(pts), W_IDX[art], np.int8))
         PB.append(np.full(len(pts), B_IDX[bel], np.int8))
-    P = np.vstack(P); PA = np.concatenate(PA); PB = np.concatenate(PB)
+        PX.append(np.full(len(pts), X_IDX[bes], np.int8))
+        if foot:
+            q, ql = densify(xy, 5.0)
+            q = np.vstack([q, xy[-1:]]); ql = np.append(ql, 0.0)   # Endpunkt für durchgehende Linien
+            NP.append(q); NL.append(ql)
+            NA.append(np.full(len(q), W_IDX[art], np.int8)); NWY.append(np.full(len(q), wno, np.int32))
+            NX.append(np.full(len(q), X_IDX[bes], np.int8))
+    P = np.vstack(P); PA = np.concatenate(PA); PB = np.concatenate(PB); PX = np.concatenate(PX)
+    NET = {"p": np.vstack(NP), "l": np.concatenate(NL), "a": np.concatenate(NA), "w": np.concatenate(NWY),
+           "x": np.concatenate(NX)}
     tree = cKDTree(P)
     log(f"Wegenetz: {len(P):,} Stützpunkte")
 
@@ -370,30 +666,39 @@ def main():
     s_bel = np.full(len(SX), B_IDX["unbekannt"], np.int8)
     s_art[hit] = PA[idx[hit]]
     s_bel[hit] = PB[idx[hit]]
+    s_bes = np.full(len(SX), X_IDX["keine"], np.int8)
+    s_bes[hit] = PX[idx[hit]]
     log(f"Wegart zugeordnet ({hit.mean():.1%} mit OSM-Weg ≤ {a.match:g} m)")
 
     G_IDX = {k: i for i, (k, _) in enumerate(GEBIET)}
-    s_geb = np.full(len(SX), G_IDX["sonstiges"], np.int8)
-    done = np.zeros(len(SX), bool)
-    order = np.argsort(SX[:, 0])
-    sx_sorted = SX[order, 0]
-    for prio, cat, lo, hi, op, ip in polys:
-        a0, a1 = np.searchsorted(sx_sorted, [lo[0], hi[0]])
-        if a0 == a1:
-            continue
-        cand = order[a0:a1]
-        cand = cand[(~done[cand]) & (SX[cand, 1] >= lo[1]) & (SX[cand, 1] <= hi[1])]
-        if not len(cand):
-            continue
-        q = SX[cand]
-        inside = np.zeros(len(cand), bool)
-        for p in op:
-            inside ^= p.contains_points(q)
-        for p in ip:
-            inside &= ~p.contains_points(q)
-        sel = cand[inside]
-        s_geb[sel] = G_IDX[cat]
-        done[sel] = True
+
+    def gebiete(pts):
+        """Flächenart je Punkt (bei Überlappung die speziellere, sonst „sonstiges“)."""
+        res = np.full(len(pts), G_IDX["sonstiges"], np.int8)
+        done = np.zeros(len(pts), bool)
+        order = np.argsort(pts[:, 0])
+        xs = pts[order, 0]
+        for prio, cat, lo, hi, op, ip in polys:
+            a0, a1 = np.searchsorted(xs, [lo[0], hi[0]])
+            if a0 == a1:
+                continue
+            cand = order[a0:a1]
+            cand = cand[(~done[cand]) & (pts[cand, 1] >= lo[1]) & (pts[cand, 1] <= hi[1])]
+            if not len(cand):
+                continue
+            q = pts[cand]
+            inside = np.zeros(len(cand), bool)
+            for p in op:
+                inside ^= p.contains_points(q)
+            for p in ip:
+                inside &= ~p.contains_points(q)
+            sel = cand[inside]
+            res[sel] = G_IDX[cat]
+            done[sel] = True
+        return res
+
+    s_geb = gebiete(SX)
+    NET["g"] = gebiete(NET["p"])   # für die Abweichung zu OSM nach Gebiet
     log("Gebiete zugeordnet")
 
     # --- Glätten: Stücke unter 10 m (z. B. Straßenquerungen) übernehmen die Kategorie davor
@@ -410,7 +715,7 @@ def main():
             elif k + 1 < len(starts) and SLINE[e0 - 1] == SLINE[min(e0, len(arr) - 1)]:
                 arr[s0:e0] = arr[e0]
         return arr
-    s_art, s_geb, s_bel = smooth(s_art), smooth(s_geb), smooth(s_bel)
+    s_art, s_geb, s_bel = smooth(s_art), smooth(s_geb), smooth(s_bel)   # s_bes nicht: Querungen sind kurz
 
     # --- Auswertung
     # --- Wiederholungen erkennen (gleiche Regel wie build.py: ≤ rep m neben
@@ -463,14 +768,14 @@ def main():
 
     per_walk = []
     bounds = np.searchsorted(SW, np.arange(len(walks) + 1))  # SW ist aufsteigend
-    tot = {k: defaultdict(float) for k in ("w", "g", "b", "wn", "gn", "bn")}
+    tot = {k: defaultdict(float) for k in ("w", "g", "b", "x", "wn", "gn", "bn", "xn")}
     for wi in range(len(walks)):
         wk = walks[wi]
         m = np.zeros(len(SX), bool); m[bounds[wi]:bounds[wi + 1]] = True
         mn = m & is_new
         new_km = wk.get("new")
         o = {"d": wk["d"], "km": wk["km"]}
-        for key, cats, arr in (("w", WEGART, s_art), ("g", GEBIET, s_geb), ("b", BELAG, s_bel)):
+        for key, cats, arr in (("w", WEGART, s_art), ("g", GEBIET, s_geb), ("b", BELAG, s_bel), ("x", BESOND, s_bes)):
             o[key] = sums(cats, arr, m, wk["km"])
             o[key + "n"] = sums(cats, arr, mn, new_km) if new_km else {}
         for key in tot:
@@ -478,6 +783,14 @@ def main():
                 tot[key][c] += v
         per_walk.append(o)
     totals = {k: {c: round(v, 2) for c, v in d.items()} for k, d in tot.items()}
+
+    # --- Stadtgrenze und Bezirke
+    kats = (("w", WEGART, s_art), ("g", GEBIET, s_geb), ("b", BELAG, s_bel), ("x", BESOND, s_bes))
+    bezirke, luecken = bezirks_auswertung(admin, member_refs, coords, a, SX, SLEN, SW, is_new, walks, NET, kats, log)
+    if luecken:
+        lf = Path(a.out).resolve().parent / "osm_luecken.json"
+        write_json(lf, luecken)
+        log(f"→ {lf.name} ({lf.stat().st_size / 1024:,.0f} KB)")
 
     def runs_to_lines(arr):
         out = defaultdict(list)
@@ -494,20 +807,23 @@ def main():
             out[int(arr[s0])].append(encode(ll))
         return out
 
-    wl, gl = runs_to_lines(s_art), runs_to_lines(s_geb)
+    wl, gl, xl = runs_to_lines(s_art), runs_to_lines(s_geb), runs_to_lines(s_bes)
+    xl.pop(X_IDX["keine"], None)   # „ohne Besonderheit“ wäre fast alles – keine eigenen Linien
     res = {
         "generated": time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime()),
         "source": Path(a.pbf).name,
         "match_m": a.match,
-        "labels": {"w": dict(WEGART), "g": dict(GEBIET), "b": dict(BELAG)},
+        "labels": {"w": dict(WEGART), "g": dict(GEBIET), "b": dict(BELAG), "x": dict(BESOND)},
         "total": totals,
         "walks": per_walk,
         "lines": {"w": {WEGART[k][0]: v for k, v in sorted(wl.items())},
-                  "g": {GEBIET[k][0]: v for k, v in sorted(gl.items())}},
+                  "g": {GEBIET[k][0]: v for k, v in sorted(gl.items())},
+                  "x": {BESOND[k][0]: v for k, v in sorted(xl.items())}},
+        "bezirke": bezirke,
     }
-    Path(a.out).write_text(json.dumps(res, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    write_json(a.out, res)
     log(f"→ {a.out} ({Path(a.out).stat().st_size / 1024:,.0f} KB)")
-    for key, cats in (("w", WEGART), ("g", GEBIET), ("b", BELAG)):
+    for key, cats in (("w", WEGART), ("g", GEBIET), ("b", BELAG), ("x", BESOND)):
         print("  " + ", ".join(f"{lab}: {res['total'][key].get(k, 0):,.0f}/{res['total'][key + 'n'].get(k, 0):,.0f} km" for k, lab in cats), file=sys.stderr)
 
 

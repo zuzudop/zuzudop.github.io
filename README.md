@@ -38,17 +38,23 @@ Optionen: `python build.py PFAD -o data.json --tol 3 --rep 3`
 
 ## Stadtgrenze
 
-`grenze.json` enthält die Stadtgrenze von München (OSM-Relation 62428). Die Karte zeichnet sie gestrichelt unter den Wegen; abschaltbar im Ebenen-Menü oben rechts. Erzeugt wird sie einmalig aus dem OSM-Auszug:
-
-```
-python grenze.py Muenchen.osm.pbf
-```
-
-Optionen: `--name`, `--level` (admin_level, Standard 6), `--tol` (Vereinfachung in m, Standard 5).
+`grenze.json` enthält die Stadtgrenze von München (OSM-Relation 62428). Die Karte zeichnet sie gestrichelt unter den Wegen; abschaltbar im Ebenen-Menü oben rechts. Sie wird von `osm_analyse.py` mit erzeugt (siehe unten), Option `--stadt` für eine andere Stadt.
 
 ## OSM-Auswertung (Wegart, Gebiet, Belag)
 
-`osm_analyse.py` ordnet jeden gegangenen Meter einer Wegart (Gehweg, Fußweg, Pfad, Trampelpfad, Straße …), einem Gebiet (Friedhof, Spielplatz, Park, Wald …) und einem Belag zu und schreibt `osm.json`. Die Seite lädt diese Datei, wenn sie vorhanden ist (Abdeckung → Wegart/Gebiet, Statistik, Zeitreise).
+`osm_analyse.py` ordnet jeden gegangenen Meter einer Wegart (Gehweg, Fußweg, Pfad, Trampelpfad, Straße …), einem Gebiet (Friedhof, Spielplatz, Park, Wald …) und einem Belag zu und schreibt `osm.json`. Die Seite lädt diese Datei, wenn sie vorhanden ist (Abdeckung → Wegart/Gebiet/Bezirke, Statistik, Zeitreise).
+
+Stadtbezirke (OSM admin_level 9) und Bezirksteile (admin_level 10) werden im selben Durchlauf ausgewertet – je Gebiet:
+- **Fläche** in km²
+- **Wegedichte** = eigene Wege (km ohne Wiederholung) / Fläche in km/km² (berechnet auf der Seite)
+- gegangene km (mit/ohne Wiederholung), Anzahl Spaziergänge und erster Besuch (ab 100 m im Gebiet)
+- km je Wegart, Gebiet und Belag – auf der Seite über die Auswahl „Bezirk“ (Abdeckung und Statistik) einzeln ansehbar
+
+**Besonderheit** (Ansicht unter Abdeckung, Balken unter Statistik): Eigenschaft des nächsten OSM-Wegs, quer zu Wegart und Gebiet – Bahnsteig (`public_transport`/`railway=platform`), Tunnel/unterirdisch (`tunnel`, `layer`/`level` < 0, `location=underground`), Innenraum/Passage (`indoor`, `tunnel=building_passage`, `covered`), Brücke/Steg (`bridge`), Straßenquerung (`footway=crossing`), eingeschränkter Zugang (`access`/`foot=customers|destination|…`). Treppen stehen unter Wegart.
+
+**Abweichung zu OSM** (`osm_luecken.json`, Ansicht unter Abdeckung): begehbare OSM-Wege in der Stadt, an denen kein Spaziergang höchstens 12 m (`--match`) entfernt vorbeiführt, als Linien nach Gebiet, Wegart oder Besonderheit, für die ganze Stadt und je Bezirk. Ein Schalter blendet die eigene Strecke gestrichelt ein. Nicht gezählt werden Autobahnen/Kraftfahrstraßen, private Wege, Parkplatzgassen und Einfahrten; Stücke unter 10 m werden weggelassen. Die Datei wird erst geladen, wenn die Ansicht geöffnet wird.
+
+Die Namen der Bezirksteile stehen in `bezirksteile.json` (OSM hat dort meist nur Nummern), siehe `bezirksteil_namen.py`.
 
 1. OSM-Auszug besorgen, z. B. `Muenchen.osm.pbf` von https://download.bbbike.org/osm/bbbike/Muenchen/
 2. Einmalig: `pip install numpy scipy matplotlib protobuf`
