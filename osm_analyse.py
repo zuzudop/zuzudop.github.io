@@ -414,10 +414,12 @@ def main():
 
     # --- Auswertung
     # --- Wiederholungen erkennen (gleiche Regel wie build.py: ≤ rep m neben
-    #     schon gegangenem Weg, chronologisch, hin/zurück am selben Tag ab 50 m)
+    #     schon gegangenem Weg, chronologisch; am selben Tag zählt ein Punkt
+    #     erst als gegangen, wenn der Weg seitdem ≥ 2·tol länger ist als die
+    #     Luftlinie, also nach einer Umkehr wie in einer Sackgasse)
     log("erkenne Wiederholungen …")
     tol = float(data.get("rep", {}).get("tol", 3.0))
-    gap = max(50.0, 5 * tol)
+    near = 2 * tol
     is_new = np.zeros(len(SX), bool)
     grid = {}
     nx, ny, nw, nc = [], [], [], []
@@ -433,11 +435,13 @@ def main():
         for gx in (cx - 1, cx, cx + 1):
             for gy in (cy - 1, cy, cy + 1):
                 for m in grid.get((gx, gy), ()):
-                    if nw[m] == wi and cum - nc[m] < gap:
+                    dd = (nx[m] - x) ** 2 + (ny[m] - y) ** 2
+                    if dd > tol * tol:
                         continue
-                    if (nx[m] - x) ** 2 + (ny[m] - y) ** 2 <= tol * tol:
-                        found = True
-                        break
+                    if nw[m] == wi and cum - nc[m] - math.sqrt(dd) < near:
+                        continue
+                    found = True
+                    break
                 if found:
                     break
             if found:

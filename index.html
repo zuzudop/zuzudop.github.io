@@ -367,10 +367,10 @@ function buildFreq() {
   const kb = REP.km_by_count, km = c => Object.entries(kb).filter(([k]) => c === 4 ? +k >= 4 : +k === c).reduce((s, [, v]) => s + v, 0);
   $('flegend').innerHTML = [[1, '1×'], [2, '2×'], [3, '3×'], [4, '4× und öfter']].map(([c, t]) =>
     `<span><i style="background:${col(c)}"></i>${t} <span class="sub">${nf0.format(km(c))} km</span></span>`).join('');
-  $('fhint').textContent = `An wie vielen Tagen ein Wegstück gegangen wurde. Als derselbe Weg gilt, was höchstens ${REP.tol} m daneben liegt.`;
+  $('fhint').textContent = `Wie oft ein Wegstück gegangen wurde – jede Begehung zählt, auch mehrere am selben Tag (z. B. hin und zurück). Als derselbe Weg gilt, was höchstens ${REP.tol} m daneben liegt.`;
   const tot = Object.values(kb).reduce((s, v) => s + v, 0);
-  $('t-freq').innerHTML = '<tr><th>Gegangen an</th><th>km</th><th>Anteil</th></tr>' +
-    Object.entries(kb).map(([k, v]) => `<tr><td>${k === '1' ? '1 Tag' : k + ' Tagen'}</td><td>${nf1.format(v)}</td><td>${nf1.format(v / tot * 100)} %</td></tr>`).join('') +
+  $('t-freq').innerHTML = '<tr><th>Gegangen</th><th>km</th><th>Anteil</th></tr>' +
+    Object.entries(kb).map(([k, v]) => `<tr><td>${k}×</td><td>${nf1.format(v)}</td><td>${nf1.format(v / tot * 100)} %</td></tr>`).join('') +
     `<tr><td><b>Ohne Wiederholung</b></td><td><b>${nf0.format(REP.unique_km)}</b></td><td></td></tr>`;
 }
 

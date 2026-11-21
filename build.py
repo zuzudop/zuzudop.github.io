@@ -147,16 +147,28 @@ def repeats(order, day_pts, tol=3.0, step=2.0):
 
     Läuft die Tage chronologisch durch und tastet jeden Weg alle `step` Meter
     ab. Ein Abtastpunkt, der höchstens `tol` Meter neben einem schon gegangenen
-    Weg liegt, gilt als Wiederholung (auch hin und zurück am selben Tag, sofern
-    der Abstand entlang des Wegs > 50 m ist). Liefert pro Tag die neuen
-    Kilometer, die Netzlänge ohne Wiederholungen und Linien der mehrfach
-    gegangenen Abschnitte, gruppiert nach Anzahl der Tage.
+    Weg liegt, gilt als Wiederholung – auch am selben Tag, z. B. in eine
+    Sackgasse hinein und wieder heraus.
+
+    Damit die eigene Spur der letzten Meter nicht als Wiederholung zählt (die
+    Abtastpunkte liegen nur `step` m auseinander), wird ein Punkt desselben
+    Tags nur dann als „schon gegangen“ gewertet, wenn der Weg seitdem deutlich
+    länger ist als die Luftlinie dorthin (Umkehr, Runde). Beim Geradeaus- oder
+    Um-die-Ecke-Gehen sind beide fast gleich. An einem Wendepunkt bleiben so
+    nur etwa `tol` m unerkannt.
+
+    Jede Begehung zählt, also auch mehrere am selben Tag. Liefert pro Tag die
+    neuen Kilometer, die Netzlänge ohne Wiederholungen (jedes Wegstück nur
+    einmal) und Linien der mehrfach gegangenen Abschnitte, gruppiert nach
+    Anzahl der Begehungen.
     """
     k = math.cos(math.radians(48.14))
     KX, KY = k * 111320.0, 110574.0
-    gap = max(50.0, 5 * tol)
+    near = 2 * tol           # Umweg gegenüber Luftlinie, ab dem es eine Umkehr ist
+    again = 2 * tol + step   # so weit gegangen ohne Berührung = neue Begehung
     grid = {}
-    nx, ny, nday, ncum, cnt, last, nl = [], [], [], [], [], [], []
+    nx, ny, nday, ncum, cnt, last, lastc, nl = [], [], [], [], [], [], [], []
+    gcum = 0.0         # über alle Tage durchlaufende Wegstrecke
     runs = []          # Folgen neu angelegter Knoten (für die Karte)
     new_km = {}
     for di, d in enumerate(order):
@@ -171,20 +183,28 @@ def repeats(order, day_pts, tol=3.0, step=2.0):
                     t = kk / n
                     x, y, l = x1 + t * (x2 - x1), y1 + t * (y2 - y1), L / n
                     cum += l
+                    gcum += l
                     cx, cy = int(x // tol), int(y // tol)
                     best, bd = -1, tol * tol
                     for i in (cx - 1, cx, cx + 1):
                         for j in (cy - 1, cy, cy + 1):
                             for m in grid.get((i, j), ()):
-                                if nday[m] == di and cum - ncum[m] < gap:
-                                    continue
                                 dd = (nx[m] - x) ** 2 + (ny[m] - y) ** 2
-                                if dd <= bd:
-                                    best, bd = m, dd
+                                if dd > bd:
+                                    continue
+                                # eigene frische Spur (Weg ≈ Luftlinie) überspringen
+                                if nday[m] == di and cum - ncum[m] - math.sqrt(dd) < near:
+                                    continue
+                                best, bd = m, dd
                     if best >= 0:
-                        if last[best] != di:
+                        # neue Begehung: anderer Tag oder seit der letzten
+                        # Berührung mehr als `again` m gegangen (Sackgasse
+                        # hin und zurück, Runde zweimal …); Berührungen
+                        # direkt hintereinander gehören zur selben Begehung
+                        if last[best] != di or gcum - lastc[best] > again:
                             cnt[best] += 1
-                            last[best] = di
+                        last[best] = di
+                        lastc[best] = gcum
                         if len(run) > 1:
                             runs.append(run)
                         run = []
@@ -192,7 +212,7 @@ def repeats(order, day_pts, tol=3.0, step=2.0):
                         new_m += l
                         m = len(nx)
                         nx.append(x); ny.append(y); nday.append(di); ncum.append(cum)
-                        cnt.append(1); last.append(di); nl.append(l)
+                        cnt.append(1); last.append(di); lastc.append(gcum); nl.append(l)
                         grid.setdefault((cx, cy), []).append(m)
                         run.append(m)
             if len(run) > 1:
@@ -392,7 +412,7 @@ def main():
     Path(a.out).write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     total = sum(w["km"] for w in out)
     und = next((w["km"] for w in out if w["d"] is None), 0)
-    print(f"ohne Wiederholungen (≤ {a.rep:g} m): {unique_km:,.1f} km; nach Anzahl Tage: "
+    print(f"ohne Wiederholungen (≤ {a.rep:g} m): {unique_km:,.1f} km; nach Anzahl Begehungen: "
           + ", ".join(f"{c}×: {v:,.1f} km" for c, v in sorted(km_by.items())), file=sys.stderr)
     print(f"{n_split} Segmente nach Tagen getrennt, {n_matched} von {len(untimed)} Segmenten ohne Zeit "
           f"einem Tag zugeordnet, {len(todo)} bleiben ohne Datum ({und:.1f} km)", file=sys.stderr)

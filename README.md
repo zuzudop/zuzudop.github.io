@@ -29,7 +29,7 @@ Optionen: `python build.py PFAD -o data.json --tol 3 --rep 3`
 - Ein Spaziergang = alle Segmente desselben Kalendertags (Europe/Berlin).
 - Segmente ohne Zeitstempel landen in „ohne Datum“ (erscheinen in Abdeckung/Heatmap und Liste, nicht in der Zeitreise).
 - Punkte ohne Zeit innerhalb einer Aufzeichnung erben den Tag des Punkts davor; ganze Stücke ohne Zeit kommen zu dem Tag, an dessen Weg sie (≤ 60 m) anschließen.
-- Wiederholungen: Wege werden chronologisch alle 2 m abgetastet; liegt ein Punkt ≤ 3 m neben einem schon gegangenen Weg, zählt er als Wiederholung (auch hin und zurück am selben Tag). Daraus: km ohne Wiederholung, neue km pro Spaziergang, Karte „Wie oft“.
+- Wiederholungen: Wege werden chronologisch alle 2 m abgetastet; liegt ein Punkt ≤ 3 m neben einem schon gegangenen Weg, zählt er als Wiederholung – auch am selben Tag (Sackgasse rein und raus, Runde zweimal). Jede Begehung zählt einzeln. Die eigene Spur der letzten Meter zählt nicht: Ein Punkt desselben Tags gilt erst als „schon gegangen“, wenn der Weg seitdem mindestens 6 m länger ist als die Luftlinie (Umkehr). An Wendepunkten bleiben dadurch nur etwa 3 m unerkannt. Daraus: km ohne Wiederholung (jedes Wegstück nur einmal), neue km pro Spaziergang, Karte „Wie oft“.
 - Gehzeit = Summe der Zeitabstände unter 15 Minuten; längere Lücken zählen als Pause.
 
 ## Lokal ansehen
