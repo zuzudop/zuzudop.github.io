@@ -261,9 +261,23 @@ const tiles = {
   'Topo': L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, subdomains: 'abc', className: 'tiles-light', attribution: OSM_ATTR + ', © <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)' }),
 };
 (dark ? tiles['Karte dunkel'] : tiles['Karte']).addTo(map);
-L.control.layers(tiles, null, { position: 'topright' }).addTo(map);
+const layersCtl = L.control.layers(tiles, null, { position: 'topright' }).addTo(map);
 L.control.scale({ imperial: false }).addTo(map);
 const renderer = L.canvas({ padding: .5, tolerance: 6 });
+// Stadtgrenze in eigener Ebene unter den Wegen
+map.createPane('grenze').style.zIndex = 350;
+map.getPane('grenze').style.pointerEvents = 'none';
+async function loadGrenze() {
+  try {
+    const r = await fetch('grenze.json', { cache: 'no-cache' });
+    if (!r.ok) return;
+    const g = await r.json();
+    const layer = L.polyline(g.rings.map(decode), { pane: 'grenze', renderer: L.svg({ pane: 'grenze' }), interactive: false,
+      color: dark ? '#ced4da' : '#495057', weight: 2.5, opacity: .8, dashArray: '8 6', lineJoin: 'round' }).addTo(map);
+    layersCtl.addOverlay(layer, 'Stadtgrenze ' + g.name);
+  } catch { /* ohne Grenze weiter */ }
+}
+loadGrenze();
 
 let W = [], dated = [], state = { tab: 'zeit', idx: 0, zmode: 'cum', cmode: 'year', years: new Set(), sel: null };
 let heat = null, playTimer = null, REP = null, freqLayers = [];

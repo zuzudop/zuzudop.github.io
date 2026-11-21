@@ -36,6 +36,16 @@ Optionen: `python build.py PFAD -o data.json --tol 3 --rep 3`
 
 `fetch()` braucht einen Webserver: `python -m http.server` im Repo-Ordner, dann http://localhost:8000 öffnen.
 
+## Stadtgrenze
+
+`grenze.json` enthält die Stadtgrenze von München (OSM-Relation 62428). Die Karte zeichnet sie gestrichelt unter den Wegen; abschaltbar im Ebenen-Menü oben rechts. Erzeugt wird sie einmalig aus dem OSM-Auszug:
+
+```
+python grenze.py Muenchen.osm.pbf
+```
+
+Optionen: `--name`, `--level` (admin_level, Standard 6), `--tol` (Vereinfachung in m, Standard 5).
+
 ## OSM-Auswertung (Wegart, Gebiet, Belag)
 
 `osm_analyse.py` ordnet jeden gegangenen Meter einer Wegart (Gehweg, Fußweg, Pfad, Trampelpfad, Straße …), einem Gebiet (Friedhof, Spielplatz, Park, Wald …) und einem Belag zu und schreibt `osm.json`. Die Seite lädt diese Datei, wenn sie vorhanden ist (Abdeckung → Wegart/Gebiet, Statistik, Zeitreise).
