@@ -258,7 +258,7 @@ const osm = cls => L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
 const tiles = {
   'Karte': osm('tiles-light'),
   'Karte dunkel': osm('tiles-dark'),
-  'Topo': L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, subdomains: 'abc', className: 'tiles-light', attribution: OSM_ATTR + ', © <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)' }),
+  'Topo': L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, subdomains: 'abc', attribution: OSM_ATTR + ', © <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)' }),
 };
 (dark ? tiles['Karte dunkel'] : tiles['Karte']).addTo(map);
 const layersCtl = L.control.layers(tiles, null, { position: 'topright' }).addTo(map);
@@ -351,8 +351,12 @@ function setIdx(i, fly) {
   $('pos').textContent = `${state.idx + 1} / ${dated.length}`;
   history.replaceState(null, '', '#' + w.d);
   redraw();
-  if (fly) map.flyToBounds(w.bounds, { padding: [40, 40], maxZoom: 15, duration: .6 });
+  if (fly) flyTo(w);
 }
+// „Bis hierhin“: alles bis zu diesem Tag zeigen, „Nur dieser Tag“: nur diese Strecke
+const flyTo = w => map.flyToBounds(state.zmode === 'cum' && w.cumBounds ? w.cumBounds : w.bounds, { padding: [40, 40], maxZoom: 15, duration: .6 });
+let flyTimer = null;  // beim Ziehen des Schiebereglers erst springen, wenn er kurz ruht
+const flySoon = () => { clearTimeout(flyTimer); flyTimer = setTimeout(() => flyTo(dated[state.idx]), 250); };
 function togglePlay(force) {
   const on = force ?? !playTimer;
   if (playTimer) { clearInterval(playTimer); playTimer = null; }
@@ -520,7 +524,7 @@ function segmented(id, key) {
   };
 }
 segmented('zmode', 'zmode');
-$('zmode').addEventListener('click', () => { if (dated.length) setIdx(state.idx); }); segmented('cmode', 'cmode');
+$('zmode').addEventListener('click', () => { if (dated.length) setIdx(state.idx, true); }); segmented('cmode', 'cmode');
 
 // ---------- Laden ----------
 (async () => {
@@ -533,13 +537,14 @@ $('zmode').addEventListener('click', () => { if (dated.length) setIdx(state.idx)
     const o = { ...w, i, lines, layer, y: w.d ? +w.d.slice(0, 4) : 0, bounds: layer.getBounds() };
     layer.bindTooltip(() => `<b>${fmtDate(o.d)}</b><br>${nf1.format(o.km)} km${o.min ? ' · ' + fmtDur(o.min) : ''}`, { sticky: true });
     layer.on('click', () => {
-      if (state.tab === 'zeit' && o.di != null) setIdx(o.di); else select(o);
+      if (state.tab === 'zeit' && o.di != null) setIdx(o.di, true); else select(o);
     });
     return o;
   });
   dated = W.filter(w => w.d);
   let cumNew = 0;
-  dated.forEach((w, i) => { w.di = i; cum += w.km; w.cum = cum; if (w.new != null) { cumNew += w.new; w.cumNew = cumNew; } });
+  const cb = L.latLngBounds([]);
+  dated.forEach((w, i) => { w.di = i; cum += w.km; w.cum = cum; cb.extend(w.bounds); w.cumBounds = L.latLngBounds(cb.getSouthWest(), cb.getNorthEast()); if (w.new != null) { cumNew += w.new; w.cumNew = cumNew; } });
 
   const total = W.reduce((s, w) => s + w.km, 0), hours = W.reduce((s, w) => s + (w.min || 0), 0) / 60;
   $('k-km').textContent = nf0.format(total);
@@ -555,14 +560,14 @@ $('zmode').addEventListener('click', () => { if (dated.length) setIdx(state.idx)
   map.fitBounds(all, { padding: [20, 20] });
 
   $('slider').max = dated.length - 1;
-  $('slider').oninput = e => { togglePlay(false); setIdx(+e.target.value); };
+  $('slider').oninput = e => { togglePlay(false); setIdx(+e.target.value); flySoon(); };
   $('prev').onclick = () => { togglePlay(false); setIdx(state.idx - 1, true); };
   $('next').onclick = () => { togglePlay(false); setIdx(state.idx + 1, true); };
   $('play').onclick = () => togglePlay();
   document.addEventListener('keydown', e => {
     if (state.tab !== 'zeit' || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) && e.target.type !== 'range') return;
-    if (e.key === 'ArrowLeft') { e.preventDefault(); togglePlay(false); setIdx(state.idx - 1); }
-    if (e.key === 'ArrowRight') { e.preventDefault(); togglePlay(false); setIdx(state.idx + 1); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); togglePlay(false); setIdx(state.idx - 1); flySoon(); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); togglePlay(false); setIdx(state.idx + 1); flySoon(); }
     if (e.key === ' ') { e.preventDefault(); togglePlay(); }
   });
   $('q').oninput = buildList; $('sort').onchange = buildList;
