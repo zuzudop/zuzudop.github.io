@@ -142,12 +142,90 @@ def read_segments(path):
                 yield name, pts
 
 
+def repeats(order, day_pts, tol=3.0, step=2.0):
+    """Wiederholte Begehungen erkennen.
+
+    Läuft die Tage chronologisch durch und tastet jeden Weg alle `step` Meter
+    ab. Ein Abtastpunkt, der höchstens `tol` Meter neben einem schon gegangenen
+    Weg liegt, gilt als Wiederholung (auch hin und zurück am selben Tag, sofern
+    der Abstand entlang des Wegs > 50 m ist). Liefert pro Tag die neuen
+    Kilometer, die Netzlänge ohne Wiederholungen und Linien der mehrfach
+    gegangenen Abschnitte, gruppiert nach Anzahl der Tage.
+    """
+    k = math.cos(math.radians(48.14))
+    KX, KY = k * 111320.0, 110574.0
+    gap = max(50.0, 5 * tol)
+    grid = {}
+    nx, ny, nday, ncum, cnt, last, nl = [], [], [], [], [], [], []
+    runs = []          # Folgen neu angelegter Knoten (für die Karte)
+    new_km = {}
+    for di, d in enumerate(order):
+        new_m, cum = 0.0, 0.0
+        for pts in day_pts[d]:
+            xy = [(p[1] * KX, p[0] * KY) for p in pts]
+            run = []
+            for (x1, y1), (x2, y2) in zip(xy, xy[1:]):
+                L = math.hypot(x2 - x1, y2 - y1)
+                n = max(1, int(L / step))
+                for kk in range(n):
+                    t = kk / n
+                    x, y, l = x1 + t * (x2 - x1), y1 + t * (y2 - y1), L / n
+                    cum += l
+                    cx, cy = int(x // tol), int(y // tol)
+                    best, bd = -1, tol * tol
+                    for i in (cx - 1, cx, cx + 1):
+                        for j in (cy - 1, cy, cy + 1):
+                            for m in grid.get((i, j), ()):
+                                if nday[m] == di and cum - ncum[m] < gap:
+                                    continue
+                                dd = (nx[m] - x) ** 2 + (ny[m] - y) ** 2
+                                if dd <= bd:
+                                    best, bd = m, dd
+                    if best >= 0:
+                        if last[best] != di:
+                            cnt[best] += 1
+                            last[best] = di
+                        if len(run) > 1:
+                            runs.append(run)
+                        run = []
+                    else:
+                        new_m += l
+                        m = len(nx)
+                        nx.append(x); ny.append(y); nday.append(di); ncum.append(cum)
+                        cnt.append(1); last.append(di); nl.append(l)
+                        grid.setdefault((cx, cy), []).append(m)
+                        run.append(m)
+            if len(run) > 1:
+                runs.append(run)
+        new_km[d] = new_m / 1000
+    # Linien der mehrfach gegangenen Abschnitte, getrennt nach Häufigkeit
+    freq = defaultdict(list)
+    for run in runs:
+        cur, seg = None, []
+        for m in run:
+            c = min(cnt[m], 5)
+            if c != cur and seg:
+                if cur > 1 and len(seg) > 1:
+                    freq[cur].append(seg)
+                seg = seg[-1:]
+            cur = c
+            seg.append((ny[m] / KY, nx[m] / KX))
+        if cur and cur > 1 and len(seg) > 1:
+            freq[cur].append(seg)
+    km_by = defaultdict(float)
+    for c, l in zip(cnt, nl):
+        km_by[c] += l / 1000
+    unique = sum(new_km.values())
+    return new_km, unique, freq, dict(km_by)
+
+
 def main():
     here = Path(__file__).resolve().parent
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("src", nargs="?", default=str(here.parent / "Walking"), help="Ordner mit GPX-Dateien")
     ap.add_argument("-o", "--out", default=str(here / "data.json"))
     ap.add_argument("--tol", type=float, default=3.0, help="Vereinfachungs-Toleranz in Metern (Standard 3)")
+    ap.add_argument("--rep", type=float, default=3.0, help="Abstand in Metern, ab dem ein Weg als erneut gegangen gilt (Standard 3)")
     a = ap.parse_args()
 
     src = Path(a.src)
@@ -155,9 +233,9 @@ def main():
     if not files:
         sys.exit(f"Keine GPX-Dateien in {src} gefunden.")
 
-    seen = set()
-    walks = defaultdict(lambda: {"segs": [], "km": 0.0, "sec": 0, "start": None, "end": None, "names": set()})
-    n_in = n_pts = n_dup = 0
+    # 1) Segmente einlesen, Duplikate verwerfen
+    seen, raw = set(), []
+    n_in = n_dup = 0
     for f in files:
         print(f"lese {f.name} …", file=sys.stderr)
         for name, pts in read_segments(f):
@@ -167,33 +245,123 @@ def main():
                 n_dup += 1
                 continue
             seen.add(h)
-            times = [p[2] for p in pts if p[2] is not None]
-            if times:
-                # Tag = häufigstes Datum der Punkte (robust gegen in JOSM
-                # zusammengefügte Segmente mit Ausreißer-Zeitstempeln)
-                days = Counter(local(t).strftime("%Y-%m-%d") for t in times)
-                key = days.most_common(1)[0][0]
-                own = sorted(t for t in times if local(t).strftime("%Y-%m-%d") == key)
-                t0, t1 = own[0], own[-1]
-                # Gehzeit = Summe der Lücken < 15 min (längere = Pause)
-                sec = sum(d for d in ((own[i + 1] - own[i]).total_seconds() for i in range(len(own) - 1)) if 0 < d < 900)
+            raw.append(pts)
+
+    # 2) Segmente mit Zeitstempeln nach Tag aufteilen. Punkte ohne Zeit (in
+    #    JOSM eingefügt) erben den Tag des vorherigen Punkts mit Zeit, am
+    #    Anfang den des ersten. Segmente, die in JOSM aus Aufzeichnungen
+    #    mehrerer Tage zusammengefügt wurden, werden so wieder getrennt.
+    pieces, untimed = [], []
+    for pts in raw:
+        days = [local(p[2]).strftime("%Y-%m-%d") if p[2] else None for p in pts]
+        if not any(days):
+            untimed.append(pts)
+            continue
+        cur = next(d for d in days if d)
+        lab = []
+        for d in days:
+            cur = d or cur
+            lab.append(cur)
+        # Läufe bilden; kurze fremde Einsprengsel (< 5 Punkte, z. B. in JOSM
+        # mit einem anderen Weg verschmolzene Knoten) dem Umfeld zuschlagen
+        runs = []
+        for i, d in enumerate(lab):
+            if runs and runs[-1][0] == d:
+                runs[-1][2] = i + 1
             else:
-                t0 = t1 = None
-                sec = 0
-                key = "undatiert"
-            ll = [(p[0], p[1]) for p in pts]
-            km = sum(hav(ll[i], ll[i + 1]) for i in range(len(ll) - 1)) / 1000
-            w = walks[key]
-            simp = simplify(ll, a.tol)
-            n_pts += len(simp)
-            w["segs"].append((t0, encode(simp)))
-            w["km"] += km
-            if t0:
-                w["sec"] += sec
-                w["start"] = t0 if w["start"] is None or t0 < w["start"] else w["start"]
-                w["end"] = t1 if w["end"] is None or t1 > w["end"] else w["end"]
-            if name and name != "Track":
-                w["names"].add(name)
+                runs.append([d, i, i + 1])
+        for k, (d, i, j) in enumerate(runs):
+            if j - i < 5 and len(runs) > 1:
+                nb = [runs[x][0] for x in (k - 1, k + 1) if 0 <= x < len(runs) and runs[x][2] - runs[x][1] >= 5]
+                if nb and all(n == nb[0] for n in nb):
+                    for x in range(i, j):
+                        lab[x] = nb[0]
+        run_pts, run_day = [], lab[0]
+        for p, d in zip(pts, lab):
+            if d != run_day:
+                if len(run_pts) >= 2:
+                    pieces.append({"day": run_day, "pts": run_pts})
+                run_pts = []
+            run_day = d
+            run_pts.append(p)
+        if len(run_pts) >= 2:
+            pieces.append({"day": run_day, "pts": run_pts})
+    n_split = sum(1 for _ in pieces) - (len(raw) - len(untimed))
+
+    # 3) Segmente ganz ohne Zeit dem Tag zuordnen, an dessen Weg sie
+    #    anschließen (Endpunkt <= MATCH m von einem Endpunkt, sonst von
+    #    irgendeinem Punkt eines datierten Wegs). Mehrere Durchläufe, damit
+    #    auch Ketten aus mehreren nachgetragenen Stücken zugeordnet werden.
+    MATCH = 60.0
+    CELL = 0.001  # ~ 110 m x 75 m
+    def cell(p):
+        return (int(p[0] / CELL), int(p[1] / CELL))
+    ends_idx, pts_idx = defaultdict(list), defaultdict(list)
+    def index(piece):
+        P = piece["pts"]
+        for p in (P[0], P[-1]):
+            ends_idx[cell(p)].append((p, piece["day"]))
+        for p in P:
+            pts_idx[cell(p)].append((p, piece["day"]))
+    def lookup(idx, q):
+        cx, cy = cell(q)
+        best = None
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for p, day in idx.get((cx + dx, cy + dy), ()):
+                    d = hav(q, p)
+                    if d <= MATCH and (best is None or d < best[0]):
+                        best = (d, day)
+        return best
+    for pc in pieces:
+        index(pc)
+    todo, n_matched = untimed, 0
+    while todo:
+        rest = []
+        for pts in todo:
+            hits = [h for q in (pts[0], pts[-1]) for h in (lookup(ends_idx, q),) if h]
+            if not hits:
+                hits = [h for q in (pts[0], pts[-1]) for h in (lookup(pts_idx, q),) if h]
+            if hits:
+                pc = {"day": min(hits)[1], "pts": pts, "added": True}
+                pieces.append(pc)
+                index(pc)
+                n_matched += 1
+            else:
+                rest.append(pts)
+        if len(rest) == len(todo):
+            break
+        todo = rest
+    for pts in todo:
+        pieces.append({"day": "undatiert", "pts": pts, "added": True})
+
+    # 4) Wiederholungen auswerten
+    print("werte Wiederholungen aus …", file=sys.stderr)
+    day_pts = defaultdict(list)
+    for pc in pieces:
+        day_pts[pc["day"]].append(pc["pts"])
+    order = sorted(d for d in day_pts if d != "undatiert") + (["undatiert"] if "undatiert" in day_pts else [])
+    new_km, unique_km, freq, km_by = repeats(order, day_pts, a.rep)
+
+    # 5) Pro Tag zusammenfassen
+    walks = defaultdict(lambda: {"segs": [], "km": 0.0, "km_add": 0.0, "sec": 0, "start": None})
+    n_pts = 0
+    for pc in pieces:
+        P, w = pc["pts"], walks[pc["day"]]
+        ll = [(p[0], p[1]) for p in P]
+        km = sum(hav(ll[i], ll[i + 1]) for i in range(len(ll) - 1)) / 1000
+        own = sorted(p[2] for p in P if p[2] and local(p[2]).strftime("%Y-%m-%d") == pc["day"])
+        t0 = own[0] if own else None
+        # Gehzeit = Summe der Lücken < 15 min (längere = Pause)
+        w["sec"] += sum(d for d in ((own[i + 1] - own[i]).total_seconds() for i in range(len(own) - 1)) if 0 < d < 900)
+        if t0 and (w["start"] is None or t0 < w["start"]):
+            w["start"] = t0
+        simp = simplify(ll, a.tol)
+        n_pts += len(simp)
+        w["segs"].append((t0, encode(simp)))
+        w["km"] += km
+        if pc.get("added"):
+            w["km_add"] += km
 
     out = []
     for key in sorted(walks, key=lambda k: (k == "undatiert", k)):
@@ -205,6 +373,8 @@ def main():
             "km": round(w["km"], 2),
             "min": round(w["sec"] / 60) if w["sec"] else None,
             "n": len(w["segs"]),
+            "add": round(w["km_add"], 2) or None,
+            "new": round(new_km.get(key, 0), 2),
             "p": [s[1] for s in w["segs"]],
         })
 
@@ -212,9 +382,20 @@ def main():
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ"),
         "files": [f.name for f in files],
         "walks": out,
+        "rep": {
+            "tol": a.rep,
+            "unique_km": round(unique_km, 1),
+            "km_by_count": {str(c): round(v, 1) for c, v in sorted(km_by.items())},
+            "lines": {str(c): [encode(simplify(l, a.tol)) for l in ls] for c, ls in sorted(freq.items())},
+        },
     }
     Path(a.out).write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     total = sum(w["km"] for w in out)
+    und = next((w["km"] for w in out if w["d"] is None), 0)
+    print(f"ohne Wiederholungen (≤ {a.rep:g} m): {unique_km:,.1f} km; nach Anzahl Tage: "
+          + ", ".join(f"{c}×: {v:,.1f} km" for c, v in sorted(km_by.items())), file=sys.stderr)
+    print(f"{n_split} Segmente nach Tagen getrennt, {n_matched} von {len(untimed)} Segmenten ohne Zeit "
+          f"einem Tag zugeordnet, {len(todo)} bleiben ohne Datum ({und:.1f} km)", file=sys.stderr)
     print(f"{len(files)} Datei(en), {n_in} Segmente ({n_dup} Duplikate), "
           f"{len(out)} Spaziergänge, {total:,.0f} km, {n_pts:,} Punkte → {a.out} "
           f"({Path(a.out).stat().st_size/1024:,.0f} KB)", file=sys.stderr)

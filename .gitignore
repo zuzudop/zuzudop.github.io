@@ -1,0 +1,4 @@
+# OSM-Rohdaten: zu gross fuer GitHub (max. 100 MB pro Datei)
+*.osm.pbf
+__pycache__/
+
