@@ -168,13 +168,13 @@ footer { margin-top: auto; padding: 12px 20px; color: var(--muted); font-size: 1
   <section id="karte">
     <div class="area-pick" hidden></div>
     <div class="seg" id="cmode">
-      <button data-v="year" aria-pressed="true">Jahr</button>
-      <button data-v="freq" aria-pressed="false">Wie oft</button>
+      <button data-v="g" aria-pressed="true">Gebiet</button>
       <button data-v="w" aria-pressed="false">Wegart</button>
-      <button data-v="g" aria-pressed="false">Gebiet</button>
+      <button data-v="freq" aria-pressed="false">Wie oft</button>
+      <button data-v="luecke" aria-pressed="false" id="cmode-luecke" hidden>Abweichung zu OSM</button>
       <button data-v="x" aria-pressed="false" id="cmode-x" hidden>Besonderheit</button>
       <button data-v="heat" aria-pressed="false">Heatmap</button>
-      <button data-v="luecke" aria-pressed="false" id="cmode-luecke" hidden>Abweichung zu OSM</button>
+      <button data-v="year" aria-pressed="false">Jahr</button>
     </div>
     <div id="leg-year">
       <div class="legend" id="legend"></div>
@@ -201,10 +201,10 @@ footer { margin-top: auto; padding: 12px 20px; color: var(--muted); font-size: 1
   </section>
 
   <section id="stats">
-    <h2>Kilometer pro Monat</h2>
+    <div class="area-pick" hidden></div>
+    <h2 id="c-month-h">Kilometer pro Monat</h2>
     <svg class="chart" id="c-month"></svg>
     <div id="s-osm" hidden>
-      <div class="area-pick" hidden style="margin-top:16px"></div>
       <h2>Wegart</h2>
       <div class="hbars" id="h-w"></div>
       <h2>Gebiet</h2>
@@ -218,7 +218,7 @@ footer { margin-top: auto; padding: 12px 20px; color: var(--muted); font-size: 1
     <div id="s-bez" hidden>
       <h2 id="t-bez-h">Stadtbezirke</h2>
       <table id="t-bez"></table>
-      <p class="hint">Wegedichte (km/km²) = eigene Wege ohne Wiederholung pro km² Fläche. Zeile anklicken wählt das Gebiet aus; bei einem gewählten Stadtbezirk stehen hier seine Bezirksteile.</p>
+      <p class="hint">Wegedichte (km/km²) = eigene Wege ohne Wiederholung pro km² Fläche. Std. = Gehzeit, anteilig nach der Strecke im Gebiet geschätzt (Zeitstempel liegen nur je Spaziergang vor). Zeile anklicken wählt das Gebiet aus; bei einem gewählten Stadtbezirk stehen hier seine Bezirksteile.</p>
     </div>
     <h2>Wie oft gegangen</h2>
     <table id="t-freq"></table>
@@ -254,6 +254,8 @@ const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).
 const nf1 = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
 const nf0 = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 });
 // Strecke mit Einheit: unter 1 km in Metern, ab 100 km ohne Nachkommastelle
+// Stunden aus Minuten: unter 10 h mit einer Nachkommastelle
+const fmtStd = m => (m < 600 ? nf1 : nf0).format(m / 60);
 const fkm = v => v < 1 ? nf0.format(Math.round(v * 1000)) + ' m' : (v >= 100 ? nf0 : nf1).format(v) + ' km';
 const WD = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
@@ -311,7 +313,7 @@ async function loadGrenze() {
 }
 loadGrenze();
 
-let W = [], dated = [], state = { tab: 'zeit', idx: 0, zmode: 'cum', cmode: 'year', years: new Set(), sel: null };
+let W = [], dated = [], state = { tab: 'zeit', idx: 0, zmode: 'cum', cmode: 'g', years: new Set(), sel: null };
 let heat = null, playTimer = null, REP = null, freqLayers = [];
 let OSM = null, osmLayers = { w: {}, g: {}, x: {} }, osmOff = { w: new Set(), g: new Set(), x: new Set() };
 const OSM_COL = {
@@ -418,9 +420,22 @@ function togglePlay(force) {
 // ---------- Abdeckung ----------
 // km je Jahr – für ganz München aus data.json, im gewählten Bezirk aus den
 // Wegabschnitten, deren Mitte im Gebiet liegt (Punkt-in-Polygon, gerade/ungerade Regel)
-function kmByYear(rings) {
-  const out = {};
-  if (!rings) { W.forEach(w => { out[w.y] = (out[w.y] || 0) + w.km; }); return out; }
+// km je Spaziergang im gewählten Gebiet (Map: Spaziergang → km); ohne Gebiet: null.
+// Ergebnis wird je Gebiet zwischengespeichert, Jahre und Monate nutzen es gemeinsam.
+let areaKmCache = { key: null, map: null };
+function kmPerWalkInArea() {
+  const r = areaRow(); if (!r) return null;
+  const key = `${state.area.lvl}:${state.area.k}`;
+  if (areaKmCache.key !== key) areaKmCache = { key, map: kmPerWalk(r.rings.map(decode)) };
+  return areaKmCache.map;
+}
+function kmByYear() {
+  const out = {}, m = kmPerWalkInArea();
+  for (const w of W) { const km = m ? m.get(w) || 0 : w.km; if (km) out[w.y] = (out[w.y] || 0) + km; }
+  return out;
+}
+function kmPerWalk(rings) {
+  const out = new Map();
   const b = L.latLngBounds(rings.flat());
   const inside = (la, lo) => {
     if (!b.contains([la, lo])) return false;
@@ -439,7 +454,7 @@ function kmByYear(rings) {
       const [a1, o1] = l[i - 1], [a2, o2] = l[i];
       if (inside((a1 + a2) / 2, (o1 + o2) / 2)) km += Math.hypot((o2 - o1) * kx, (a2 - a1) * ky);
     }
-    if (km) out[w.y] = (out[w.y] || 0) + km;
+    if (km) out.set(w, km);
   }
   return out;
 }
@@ -451,7 +466,7 @@ function buildLegend() {
   renderYearLegend();
 }
 function renderYearLegend() {
-  const r = areaRow(), km = kmByYear(r ? r.rings.map(decode) : null);
+  const r = areaRow(), km = kmByYear();
   $('legend').innerHTML = years.map(y =>
     `<label><input type="checkbox" data-y="${y}" ${state.years.has(y) ? 'checked' : ''}> <i style="background:${yearColor(y)}"></i>${y || 'Ohne Datum'} <span class="sub">${!km[y] ? '–' : !r && km[y] >= 1 ? nf0.format(km[y]) + ' km' : fkm(km[y])}</span></label>`).join('');
 }
@@ -489,7 +504,7 @@ function buildOsmLegend(k) {
     ? `Wegart laut OpenStreetMap (nächster Weg ≤ ${OSM.match_m} m). Stand der Karte: ${OSM.source}.`
     : k === 'x'
     ? `Eigenschaft des nächsten OSM-Wegs (≤ ${OSM.match_m} m): Bahnsteig, Tunnel/unterirdisch, Innenraum/Passage, Brücke/Steg, Straßenquerung (Zebrastreifen, Ampel), eingeschränkter Zugang (z. B. nur Kunden, Anlieger). Treppen stehen unter Wegart.`
-    : 'Fläche, durch die der Weg führt, laut OpenStreetMap. Bei Überlappung zählt die speziellere (z. B. Spielplatz vor Park).';
+    : 'Fläche, durch die der Weg führt, laut OpenStreetMap. Bei Überlappung zählt die speziellere (z. B. Spielplatz vor Park). Straßenraum ohne eigene Fläche bekommt die nächste Fläche im Umkreis von 20 m, bevorzugt im selben Stadtbezirk.';
 }
 function hbars(el, k, totals, all) {
   const L = OSM.labels[k], ent = Object.keys(L).filter(c => totals[c] >= .05).map(c => [c, totals[c]]).sort((a, b) => b[1] - a[1]);
@@ -588,12 +603,13 @@ function buildBezTable() {
     : bt.map((r, j) => [r, `10:${j}`]).filter(([r]) => r.bz === bzK);
   const ganz = bzK == null ? null : OSM.bezirke['9'][bzK];
   const sum = f => rows.reduce((s, [r]) => s + r[f], 0);
-  const all = ganz || { km2: sum('km2'), kmn: sum('kmn') };
+  const all = ganz || { km2: sum('km2'), kmn: sum('kmn'), min: sum('min') };
   const sel = a ? `${a.lvl}:${a.k}` : '';
+  const std = r => r.min != null ? `<td>${fmtStd(r.min)}</td>` : '', hStd = rows[0]?.[0].min != null ? '<th title="Gehzeit in Stunden, anteilig nach Strecke">Std.</th>' : '';
   $('t-bez-h').textContent = ganz ? 'Bezirksteile von ' + bzLabel(ganz) : 'Stadtbezirke';
-  $('t-bez').innerHTML = `<tr><th>${ganz ? 'Bezirksteil' : 'Bezirk'}</th><th>km²</th><th>Ohne Wdh.</th><th>km/km²</th></tr>` +
-    rows.map(([r, v]) => `<tr data-v="${v}"${v === sel ? ' class="sel"' : ''}><td>${bzLabel(r)}</td><td>${nf1.format(r.km2)}</td><td>${fkm(r.kmn)}</td><td>${nf1.format(bzDichte(r))}</td></tr>`).join('') +
-    `<tr${ganz ? ` data-v="9:${bzK}"` : ''}><td><b>${ganz ? 'Ganzer Bezirk' : 'Stadt gesamt'}</b></td><td><b>${nf1.format(all.km2)}</b></td><td><b>${fkm(all.kmn)}</b></td><td><b>${nf1.format(bzDichte(all))}</b></td></tr>`;
+  $('t-bez').innerHTML = `<tr><th>${ganz ? 'Bezirksteil' : 'Bezirk'}</th><th>km²</th><th>Ohne Wdh.</th><th>km/km²</th>${hStd}</tr>` +
+    rows.map(([r, v]) => `<tr data-v="${v}"${v === sel ? ' class="sel"' : ''}><td>${bzLabel(r)}</td><td>${nf1.format(r.km2)}</td><td>${fkm(r.kmn)}</td><td>${nf1.format(bzDichte(r))}</td>${std(r)}</tr>`).join('') +
+    `<tr${ganz ? ` data-v="9:${bzK}"` : ''}><td><b>${ganz ? 'Ganzer Bezirk' : 'Stadt gesamt'}</b></td><td><b>${nf1.format(all.km2)}</b></td><td><b>${fkm(all.kmn)}</b></td><td><b>${nf1.format(bzDichte(all))}</b></td>${hStd ? `<td><b>${fmtStd(all.min)}</b></td>` : ''}</tr>`;
   $('t-bez').onclick = e => { const tr = e.target.closest('tr[data-v]'); if (tr) setArea(tr.dataset.v, true); };
   $('s-bez').hidden = false;
 }
@@ -641,6 +657,7 @@ function setArea(v, fly) {
   }
   renderOsmStats();
   renderYearLegend();
+  renderMonthChart();
   buildBezTable();
   redraw();
 }
@@ -654,8 +671,10 @@ function renderKpis() {
     set('k-km', nf1.format(r.km), 'km gesamt hier');
     $('k-uq').textContent = nf1.format(r.kmn); $('k-uq-l').textContent = 'km ohne Wiederholung';
     set('k-n', nf0.format(r.n), 'Spaziergänge dort');
-    set('k-h', nf1.format(bzDichte(r)), 'km/km² Wegedichte');
-    $('k-area').textContent = (state.area.lvl === '10' ? 'Bezirksteil ' : 'Stadtbezirk ') + bzLabel(r) + ` · ${nf1.format(r.km2)} km²` + (r.first ? ` · zuerst am ${fmtDate(r.first)}` : '');
+    if (r.min != null) set('k-h', fmtStd(r.min), 'Stunden (ca., anteilig)');
+    else set('k-h', nf1.format(bzDichte(r)), 'km/km² Wegedichte');
+    $('k-area').textContent = (state.area.lvl === '10' ? 'Bezirksteil ' : 'Stadtbezirk ') + bzLabel(r) + ` · ${nf1.format(r.km2)} km²` +
+      (r.min != null ? ` · Wegedichte ${nf1.format(bzDichte(r))} km/km²` : '') + (r.first ? ` · zuerst am ${fmtDate(r.first)}` : '');
   } else {
     set('k-km', KPI.km, 'Kilometer gesamt');
     $('k-uq').textContent = KPI.uq; $('k-uq-l').textContent = 'km ohne Wiederholung';
@@ -705,7 +724,7 @@ function barChart(svg, data, { h = 140, labelEvery = 1, fmt = v => nf0.format(v)
   let s = '';
   for (const f of [0, .5, 1]) {
     const y = pad.t + ih - f * ih;
-    s += `<line x1="${pad.l}" x2="${w - pad.r}" y1="${y}" y2="${y}" stroke="var(--line)"/><text x="${pad.l - 4}" y="${y + 3}" text-anchor="end">${nf0.format(nice * f)}</text>`;
+    s += `<line x1="${pad.l}" x2="${w - pad.r}" y1="${y}" y2="${y}" stroke="var(--line)"/><text x="${pad.l - 4}" y="${y + 3}" text-anchor="end">${(nice < 10 ? nf1 : nf0).format(nice * f)}</text>`;
   }
   data.forEach((d, i) => {
     const bh = d.v / nice * ih, x = pad.l + i * bw;
@@ -714,14 +733,24 @@ function barChart(svg, data, { h = 140, labelEvery = 1, fmt = v => nf0.format(v)
   });
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`); svg.innerHTML = s;
 }
+// Kilometer pro Monat – für ganz München oder den gewählten Stadtbezirk/Bezirksteil
+let MONTHS = [];
+function renderMonthChart() {
+  if (!MONTHS.length) return;
+  const m = kmPerWalkInArea(), r = areaRow();
+  const byM = Object.fromEntries(MONTHS.map(k => [k, 0]));
+  dated.forEach(w => { byM[w.d.slice(0, 7)] += m ? m.get(w) || 0 : w.km; });
+  barChart($('c-month'), MONTHS.map(k => ({ v: byM[k], label: k.endsWith('-01') ? k.slice(0, 4) : '', title: `${MON[+k.slice(5) - 1]} ${k.slice(0, 4)}` })),
+    { fmt: v => fkm(v) });
+  $('c-month-h').textContent = 'Kilometer pro Monat' + (r ? ' · ' + bzLabel(r) : '');
+}
 function buildStats() {
   const d = dated; if (!d.length) return;
   const first = d[0].d.slice(0, 7), last = d[d.length - 1].d.slice(0, 7);
   const months = []; let [y, m] = first.split('-').map(Number);
   while (`${y}-${String(m).padStart(2, '0')}` <= last) { months.push(`${y}-${String(m).padStart(2, '0')}`); if (++m > 12) { m = 1; y++; } }
-  const byM = Object.fromEntries(months.map(k => [k, 0]));
-  d.forEach(w => byM[w.d.slice(0, 7)] += w.km);
-  barChart($('c-month'), months.map(k => ({ v: byM[k], label: k.endsWith('-01') ? k.slice(0, 4) : '', title: `${MON[+k.slice(5) - 1]} ${k.slice(0, 4)}` })));
+  MONTHS = months;
+  renderMonthChart();
 
   const byY = {};
   W.forEach(w => { const k = w.y || 'Ohne Datum'; (byY[k] ??= { km: 0, n: 0, min: 0, nw: 0 }); byY[k].km += w.km; byY[k].nw += w.new || 0; byY[k].n += w.d ? 1 : 0; byY[k].min += w.min || 0; });

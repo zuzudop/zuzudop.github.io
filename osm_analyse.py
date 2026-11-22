@@ -390,10 +390,8 @@ def luecken_je_gebiet(NET, in_city, gap, ps):
     return rows
 
 
-def bezirks_auswertung(admin, member_refs, coords, a, SX, SLEN, SW, is_new, walks, NET, kats, log):
-    """Stadtgrenze → grenze.json; je Stadtbezirk/Bezirksteil: Fläche, gegangene
-    km, erster Besuch und km je Wegart/Gebiet/Belag. Dazu die „Abweichung zu
-    OSM“ (nicht gegangene begehbare Wege in der Stadt)."""
+def admin_polys(admin, member_refs, coords):
+    """Verwaltungsgrenzen (Stadt, Stadtbezirke, Bezirksteile) als Flächen."""
     def build(b):
         outer = [member_refs[i].tolist() for i, role in b["mem"] if role in ("outer", "") and i in member_refs]
         inner = [member_refs[i].tolist() for i, role in b["mem"] if role == "inner" and i in member_refs]
@@ -407,22 +405,33 @@ def bezirks_auswertung(admin, member_refs, coords, a, SX, SLEN, SW, is_new, walk
         return {**b, "op_xy": op, "op": [MPath(c) for c in op], "ip": [MPath(c) for c in ip],
                 "lo": allc.min(0), "hi": allc.max(0), "c": ring_centroid(big),
                 "area": sum(ring_area(c) for c in op) - sum(ring_area(c) for c in ip)}
+    polys = [p for p in (build(b) for b in admin) if p]
+    stadt = next((p for p in polys if p["level"] == 6), None)
+    for p in polys:
+        p["in_stadt"] = not stadt or any(mp.contains_point(p["c"]) for mp in stadt["op"])
+    return polys, stadt
 
+
+def stadtbezirke(polys):
+    """Stadtbezirke (admin_level 9) in der Stadt, sortiert wie in osm.json."""
+    ps = [p for p in polys if p["level"] == 9 and p["in_stadt"]]
+    return sorted(ps, key=lambda p: (p["ref"].zfill(5), p["name"]))
+
+
+def bezirks_auswertung(polys, stadt, a, SX, SLEN, SW, is_new, walks, NET, kats, log):
+    """Stadtgrenze → grenze.json; je Stadtbezirk/Bezirksteil: Fläche, gegangene
+    km, (anteilige) Gehzeit, erster Besuch und km je Wegart/Gebiet/Belag. Dazu
+    die „Abweichung zu OSM“ (nicht gegangene begehbare Wege in der Stadt)."""
     def to_ll(xy, tol):
         return encode(simplify([(y / KY, x / KX) for x, y in xy], tol))
 
-    polys = [p for p in (build(b) for b in admin) if p]
-    stadt = next((p for p in polys if p["level"] == 6), None)
     if stadt:
         write_json(a.grenze, {"name": a.stadt, "rings": [to_ll(c, 5.0) for c in stadt["op_xy"]]})
         log(f"Stadtgrenze {a.stadt} → {Path(a.grenze).name}")
     else:
         log(f"Stadtgrenze {a.stadt} nicht gefunden")
 
-    def in_stadt(p):
-        if not stadt:
-            return True
-        return any(mp.contains_point(p["c"]) for mp in stadt["op"])
+    in_stadt = lambda p: p["in_stadt"]
 
     # Abweichung zu OSM: begehbare Wege in der Stadt (ohne Stadtgrenze: im ganzen Bereich)
     in_city = assign(NET["p"], [stadt]) >= 0 if stadt else np.ones(len(NET["p"]), bool)
@@ -454,6 +463,11 @@ def bezirks_auswertung(admin, member_refs, coords, a, SX, SLEN, SW, is_new, walk
         # km je (Bezirk, Spaziergang) → Anzahl Spaziergänge (≥ 100 m) und erster Besuch
         key = sa[s].astype(np.int64) * len(walks) + SW[s]
         per = np.bincount(key, weights=SLEN[s], minlength=len(ps) * len(walks)).reshape(len(ps), len(walks))
+        # Gehzeit je Gebiet, anteilig: Minuten des Spaziergangs × Anteil seiner Strecke im Gebiet
+        # (Zeitstempel liegen nur je Spaziergang vor, nicht je Punkt)
+        walk_len = np.bincount(SW, weights=SLEN, minlength=len(walks))
+        walk_min = np.array([w.get("min") or 0 for w in walks], float)
+        minuten = per @ np.divide(walk_min, walk_len, out=np.zeros(len(walks)), where=walk_len > 0)
         # km je Kategorie (w/g/b) im Gebiet, mit und ohne Wiederholung (Suffix n)
         kat = [{} for _ in ps]
         for kk, cats, arr in kats:
@@ -469,6 +483,7 @@ def bezirks_auswertung(admin, member_refs, coords, a, SX, SLEN, SW, is_new, walk
                 "name": p["name"], "ref": p["ref"], "wikidata": p["wikidata"],
                 "km2": round(p["area"] / 1e6, 3),
                 "km": round(float(km[k]), 2), "kmn": round(float(kmn[k]), 2),
+                "min": round(float(minuten[k])),
                 "n": len(vis), "first": min(dates[wi] for wi in vis) if vis else None,
                 "rings": [to_ll(c, 5.0) for c in p["op_xy"]],
                 **kat[k],
@@ -478,8 +493,7 @@ def bezirks_auswertung(admin, member_refs, coords, a, SX, SLEN, SW, is_new, walk
         log(f"admin_level {lvl}: {len(rows)} Gebiete")
     # Bezirksteil → Stadtbezirk (über den Schwerpunkt)
     if "9" in out and "10" in out:
-        bz = [p for p in polys if p["level"] == 9 and in_stadt(p)]
-        bz.sort(key=lambda p: (p["ref"].zfill(5), p["name"]))
+        bz = stadtbezirke(polys)
         for r in out["10"]:
             r["bz"] = next((k for k, p in enumerate(bz) if any(mp.contains_point(r["_c"]) for mp in p["op"])), None)
     for rows in out.values():
@@ -496,6 +510,8 @@ def main():
     ap.add_argument("--data", default=str(here / "data.json"))
     ap.add_argument("-o", "--out", default=str(here / "osm.json"))
     ap.add_argument("--match", type=float, default=12.0, help="max. Abstand zu einem OSM-Weg in m (Standard 12)")
+    ap.add_argument("--rand", type=float, default=20.0,
+                    help="Wege ohne Fläche (z. B. Straßenraum) der nächsten Fläche bis zu diesem Abstand zuordnen, in m (Standard 20)")
     ap.add_argument("--stadt", default="München", help="Name der Stadt (Grenze admin_level 6, Standard München)")
     ap.add_argument("--grenze", default=str(here / "grenze.json"), help="Ausgabe der Stadtgrenze")
     a = ap.parse_args()
@@ -697,9 +713,43 @@ def main():
             done[sel] = True
         return res
 
-    s_geb = gebiete(SX)
-    NET["g"] = gebiete(NET["p"])   # für die Abweichung zu OSM nach Gebiet
-    log("Gebiete zugeordnet")
+    # „Ohne Flächenangabe“ verkleinern: OSM-Flächen enden meist am Straßenrand, der Straßenraum
+    # liegt in keiner Fläche. Solche Punkte bekommen die nächste Fläche im Umkreis von --rand m.
+    # Kommen mehrere Flächen infrage, gewinnt eine, deren Rand im selben Stadtbezirk liegt wie der Punkt.
+    apolys, stadt = admin_polys(admin, member_refs, coords)
+    BZ = stadtbezirke(apolys)
+    BP, BC = [], []
+    for prio, cat, lo, hi, op, ip in polys:
+        for mp in op:
+            q, _ = densify(mp.vertices, 5.0)
+            BP.append(q); BC.append(np.full(len(q), G_IDX[cat], np.int8))
+    BP = np.vstack(BP); BC = np.concatenate(BC)
+    BB = assign(BP, BZ) if BZ else np.full(len(BP), -1, np.int32)   # Stadtbezirk jedes Randpunkts
+    btree = cKDTree(BP)
+    SONST = G_IDX["sonstiges"]
+
+    def nachbarflaeche(pts, res, k=24):
+        idx = np.flatnonzero(res == SONST)
+        if not len(idx):
+            return res
+        q = pts[idx]
+        qb = assign(q, BZ) if BZ else np.full(len(q), -1, np.int32)
+        d, j = btree.query(q, k=k, distance_upper_bound=a.rand)   # nach Abstand sortiert
+        ok = np.isfinite(d)
+        jj = np.where(ok, j, 0)
+        gleich = ok & (BB[jj] == qb[:, None]) & (qb[:, None] >= 0)
+        hat_gleich, hat_irgend = gleich.any(1), ok[:, 0]
+        wahl = np.where(hat_gleich, gleich.argmax(1), 0)          # nächster im eigenen Bezirk, sonst nächster
+        sel = hat_gleich | hat_irgend
+        out = res.copy()
+        out[idx[sel]] = BC[jj[np.arange(len(idx)), wahl]][sel]
+        return out
+
+    s_geb0 = gebiete(SX)
+    s_geb = nachbarflaeche(SX, s_geb0)
+    NET["g"] = nachbarflaeche(NET["p"], gebiete(NET["p"]))   # für die Abweichung zu OSM nach Gebiet
+    log(f"Gebiete zugeordnet (ohne Flächenangabe: {SLEN[s_geb0 == SONST].sum() / 1000:,.0f} → "
+        f"{SLEN[s_geb == SONST].sum() / 1000:,.0f} km, Umkreis {a.rand:g} m)")
 
     # --- Glätten: Stücke unter 10 m (z. B. Straßenquerungen) übernehmen die Kategorie davor
     def smooth(arr, min_n=5):
@@ -786,7 +836,7 @@ def main():
 
     # --- Stadtgrenze und Bezirke
     kats = (("w", WEGART, s_art), ("g", GEBIET, s_geb), ("b", BELAG, s_bel), ("x", BESOND, s_bes))
-    bezirke, luecken = bezirks_auswertung(admin, member_refs, coords, a, SX, SLEN, SW, is_new, walks, NET, kats, log)
+    bezirke, luecken = bezirks_auswertung(apolys, stadt, a, SX, SLEN, SW, is_new, walks, NET, kats, log)
     if luecken:
         lf = Path(a.out).resolve().parent / "osm_luecken.json"
         write_json(lf, luecken)

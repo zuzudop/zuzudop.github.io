@@ -48,6 +48,7 @@ Stadtbezirke (OSM admin_level 9) und Bezirksteile (admin_level 10) werden im sel
 - **Fläche** in km²
 - **Wegedichte** = eigene Wege (km ohne Wiederholung) / Fläche in km/km² (berechnet auf der Seite)
 - gegangene km (mit/ohne Wiederholung), Anzahl Spaziergänge und erster Besuch (ab 100 m im Gebiet)
+- Gehzeit, anteilig geschätzt: Minuten je Spaziergang × Anteil seiner Strecke im Gebiet
 - km je Wegart, Gebiet und Belag – auf der Seite über die Auswahl „Bezirk“ (Abdeckung und Statistik) einzeln ansehbar
 
 **Besonderheit** (Ansicht unter Abdeckung, Balken unter Statistik): Eigenschaft des nächsten OSM-Wegs, quer zu Wegart und Gebiet – Bahnsteig (`public_transport`/`railway=platform`), Tunnel/unterirdisch (`tunnel`, `layer`/`level` < 0, `location=underground`), Innenraum/Passage (`indoor`, `tunnel=building_passage`, `covered`), Brücke/Steg (`bridge`), Straßenquerung (`footway=crossing`), eingeschränkter Zugang (`access`/`foot=customers|destination|…`). Treppen stehen unter Wegart.
@@ -60,5 +61,7 @@ Die Namen der Bezirksteile stehen in `bezirksteile.json` (OSM hat dort meist nur
 2. Einmalig: `pip install numpy scipy matplotlib protobuf`
 3. Nach `python build.py` ausführen: `python osm_analyse.py Muenchen.osm.pbf` (ca. 1 Minute)
 4. `osm.json` mit hochladen. **Die .pbf-Dateien nicht ins Repo hochladen** (zu groß, GitHub erlaubt max. 100 MB pro Datei).
+
+Gebiet: OSM-Flächen enden meist am Straßenrand. Liegt ein Weg in keiner Fläche, bekommt er die nächste Fläche im Umkreis von 20 m (`--rand`); kommen mehrere infrage, gewinnt eine im selben Stadtbezirk.
 
 Hinweise: Es werden die heutigen OSM-Daten verwendet. Wegart = nächster OSM-Weg im Umkreis von 12 m; Stücke unter 10 m (z. B. Straßenquerungen) übernehmen die Kategorie davor. Bei überlappenden Flächen zählt die speziellere.

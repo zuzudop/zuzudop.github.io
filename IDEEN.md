@@ -12,18 +12,21 @@ Sammlung offener Ideen für Walking München. Erledigtes einfach löschen oder a
 - [ ] Weitere Tags prüfen: `crossing=*` (Ampel/Zebrastreifen), `lit` (beleuchtet), `incline` (Steigung), `smoothness`, `wheelchair`, `access`-Varianten.
 - [ ] Brücken über Straßen: Wird ein Weg auf der Brücke manchmal der Straße darunter zugeordnet (12-m-Radius)? `layer` könnte helfen.
 
-- [ ] **„Ohne Flächenangabe“ verkleinern:** In OSM enden Flächen wie Wohngebiet meist an der Bordsteinkante, der Straßenraum liegt in keiner Fläche. Straßen könnten der angrenzenden Fläche zugeordnet werden (z. B. nächste Fläche innerhalb von 15–20 m oder die Fläche auf beiden Seiten).
+- [x] „Ohne Flächenangabe“ verkleinert: Straßenraum bekommt die nächste Fläche im Umkreis von 20 m (`--rand`), Flächen im eigenen Stadtbezirk haben Vorrang.
+- [ ] Zuordnung des Straßenraums verfeinern: z. B. Fläche auf beiden Straßenseiten prüfen statt nur die nächste.
 
 ## Auswertungen
 
 - [ ] „Wie oft“ (1×/2×/…) je Bezirk – dafür die Wiederholungszählung in `build.py` je Bezirk aufteilen.
 - [ ] Zeitreise mit Bezirksauswahl (Bezirk „füllt sich“ über die Zeit).
-- [ ] Gehzeit je Bezirk (braucht Zeitstempel je Abschnitt statt je Spaziergang).
+- [x] Gehzeit je Bezirk – vorerst anteilig nach Strecke geschätzt.
+- [ ] Exakte Gehzeit je Bezirk: `build.py` müsste Zeitstempel je Abschnitt in `data.json` mitliefern.
 - [ ] Abweichung zu OSM: Liste der größten zusammenhängenden Lücken (z. B. „längste nicht gegangene Wege“) als Anregung für nächste Spaziergänge.
 
 ## Seite / Bedienung
 
-- [ ] **Unterpunkte unter „Abdeckung“ besser anordnen** und nach Relevanz sortieren (derzeit Jahr, Wie oft, Wegart, Gebiet, Besonderheit, Heatmap, Abweichung zu OSM nebeneinander).
+- [x] Unterpunkte unter „Abdeckung“ nach Relevanz sortiert: Gebiet, Wegart, Wie oft, Abweichung zu OSM, Besonderheit, Heatmap, Jahr.
+- [ ] Anordnung der Unterpunkte optisch verbessern (z. B. Gruppen oder zweite Zeile statt einer langen Knopfleiste).
 
 ## Technik
 
