@@ -245,6 +245,8 @@ def main():
     ap.add_argument("src", nargs="?", default=str(here.parent / "Walking"), help="Ordner mit GPX-Dateien")
     ap.add_argument("-o", "--out", default=str(here / "data.json"))
     ap.add_argument("--tol", type=float, default=3.0, help="Vereinfachungs-Toleranz in Metern (Standard 3)")
+    ap.add_argument("--rep-tol", type=float, default=0.5,
+                    help="Vereinfachung der Wie-oft-Linien in Metern (Standard 0,5) – klein halten, sonst schneiden sie Ecken ab und enden neben dem Weg")
     ap.add_argument("--rep", type=float, default=3.0, help="Abstand in Metern, ab dem ein Weg als erneut gegangen gilt (Standard 3)")
     a = ap.parse_args()
 
@@ -406,7 +408,7 @@ def main():
             "tol": a.rep,
             "unique_km": round(unique_km, 1),
             "km_by_count": {str(c): round(v, 1) for c, v in sorted(km_by.items())},
-            "lines": {str(c): [encode(simplify(l, a.tol)) for l in ls] for c, ls in sorted(freq.items())},
+            "lines": {str(c): [encode(simplify(l, min(a.tol, a.rep_tol))) for l in ls] for c, ls in sorted(freq.items())},
         },
     }
     Path(a.out).write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")

@@ -25,8 +25,7 @@ Sammlung offener Ideen für Walking München. Erledigtes einfach löschen oder a
 
 ## Seite / Bedienung
 
-- [x] Unterpunkte unter „Abdeckung“ nach Relevanz sortiert: Gebiet, Wegart, Wie oft, Abweichung zu OSM, Besonderheit, Heatmap, Jahr.
-- [ ] Anordnung der Unterpunkte optisch verbessern (z. B. Gruppen oder zweite Zeile statt einer langen Knopfleiste).
+- [x] Anordnung der Unterpunkte unter „Abdeckung“ verbessert: Hauptleiste Gebiet, Wegart, Belag, Besonderheit; darunter klein „Weitere: Wie oft, Heatmap, Jahr“. „Nicht gegangene Wege“ (früher „Abweichung zu OSM“) ist ein Schalter innerhalb der vier Merkmale. Statistik in derselben Reihenfolge.
 
 ## Technik
 

@@ -336,12 +336,12 @@ def assign(pts, polys):
     return res
 
 
-LUECKE_KATS = (("w", WEGART, "a"), ("g", GEBIET, "g"), ("x", BESOND, "x"))   # Aufteilung nach Wegart/Gebiet/Besonderheit
+LUECKE_KATS = (("g", GEBIET, "g"), ("w", WEGART, "a"), ("b", BELAG, "b"), ("x", BESOND, "x"))   # Aufteilung nach Gebiet/Wegart/Belag/Besonderheit
 
 
 def luecken_auswertung(NET, in_city, SX, match, log):
     """Begehbare OSM-Wege in der Stadt, an denen kein Spaziergang ≤ match m
-    vorbeiführt („Abweichung zu OSM“): Linien und km je Wegart und je Gebiet."""
+    vorbeiführt („Abweichung zu OSM“): Linien und km je Gebiet, Wegart, Belag und Besonderheit."""
     NP, NL, NW = NET["p"], NET["l"], NET["w"]
     dist, _ = cKDTree(SX).query(NP[in_city], distance_upper_bound=match)
     gap = np.zeros(len(NP), bool)
@@ -371,7 +371,7 @@ def luecken_auswertung(NET, in_city, SX, match, log):
 
 
 def luecken_je_gebiet(NET, in_city, gap, ps):
-    """km begehbares Netz und nicht gegangene km je Bezirk, nach Wegart und nach Gebiet."""
+    """km begehbares Netz und nicht gegangene km je Bezirk, nach Gebiet, Wegart, Belag und Besonderheit."""
     NP, NL = NET["p"], NET["l"]
     pidx = np.flatnonzero(in_city)
     na = assign(NP[pidx], ps)
@@ -620,7 +620,7 @@ def main():
     B_IDX = {k: i for i, (k, _) in enumerate(BELAG)}
     X_IDX = {k: i for i, (k, _) in enumerate(BESOND)}
     P, PA, PB, PX = [], [], [], []
-    NP, NL, NA, NWY, NX = [], [], [], [], []  # begehbares Wegenetz alle 5 m: Punkt, Länge, Wegart, Weg-Nr., Besonderheit
+    NP, NL, NA, NWY, NX, NB = [], [], [], [], [], []  # begehbares Wegenetz alle 5 m: Punkt, Länge, Wegart, Weg-Nr., Besonderheit, Belag
     for wno, (refs, art, bel, foot, bes) in enumerate(hw_ways):
         i = np.searchsorted(nid, refs)
         i[i >= len(nid)] = 0
@@ -639,10 +639,10 @@ def main():
             q = np.vstack([q, xy[-1:]]); ql = np.append(ql, 0.0)   # Endpunkt für durchgehende Linien
             NP.append(q); NL.append(ql)
             NA.append(np.full(len(q), W_IDX[art], np.int8)); NWY.append(np.full(len(q), wno, np.int32))
-            NX.append(np.full(len(q), X_IDX[bes], np.int8))
+            NX.append(np.full(len(q), X_IDX[bes], np.int8)); NB.append(np.full(len(q), B_IDX[bel], np.int8))
     P = np.vstack(P); PA = np.concatenate(PA); PB = np.concatenate(PB); PX = np.concatenate(PX)
     NET = {"p": np.vstack(NP), "l": np.concatenate(NL), "a": np.concatenate(NA), "w": np.concatenate(NWY),
-           "x": np.concatenate(NX)}
+           "x": np.concatenate(NX), "b": np.concatenate(NB)}
     tree = cKDTree(P)
     log(f"Wegenetz: {len(P):,} Stützpunkte")
 
@@ -857,7 +857,7 @@ def main():
             out[int(arr[s0])].append(encode(ll))
         return out
 
-    wl, gl, xl = runs_to_lines(s_art), runs_to_lines(s_geb), runs_to_lines(s_bes)
+    wl, gl, bl, xl = runs_to_lines(s_art), runs_to_lines(s_geb), runs_to_lines(s_bel), runs_to_lines(s_bes)
     xl.pop(X_IDX["keine"], None)   # „ohne Besonderheit“ wäre fast alles – keine eigenen Linien
     res = {
         "generated": time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime()),
@@ -868,6 +868,7 @@ def main():
         "walks": per_walk,
         "lines": {"w": {WEGART[k][0]: v for k, v in sorted(wl.items())},
                   "g": {GEBIET[k][0]: v for k, v in sorted(gl.items())},
+                  "b": {BELAG[k][0]: v for k, v in sorted(bl.items())},
                   "x": {BESOND[k][0]: v for k, v in sorted(xl.items())}},
         "bezirke": bezirke,
     }

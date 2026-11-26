@@ -23,6 +23,7 @@ Statische Webseite für https://zuzudop.github.io – alle Spaziergänge durch M
 Optionen: `python build.py PFAD -o data.json --tol 3 --rep 3`
 - `--tol` = Vereinfachung der Linien in Metern (0 = aus)
 - `--rep` = Abstand in Metern, bis zu dem ein Weg als erneut gegangen gilt (Standard 3)
+- `--rep-tol` = Vereinfachung der „Wie oft“-Linien in Metern (Standard 0,5). Bewusst kleiner als `--tol`: Bei 3 m schneiden die Linien kurze Ecken ab und enden neben dem Weg.
 
 ## Wie die Daten gruppiert werden
 
